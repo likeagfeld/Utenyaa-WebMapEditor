@@ -18,8 +18,34 @@
     <button id="btn-save"    class="btn primary">Save</button>
     <button id="btn-validate" class="btn">Validate</button>
     <button id="btn-download" class="btn">Download .UTE</button>
+    <button id="btn-admin"    class="btn admin-btn">Admin Mode</button>
+    <span id="admin-badge" class="admin-badge hidden">ADMIN</span>
   </div>
 </header>
+
+<dialog id="admin-dialog">
+  <form id="admin-form" class="dialog-content">
+    <h2>Admin login</h2>
+    <p class="muted" style="margin-bottom:10px;font-size:12px">
+      Required to delete maps. Cloning + saving your own maps is always allowed.
+    </p>
+    <label style="display:block;margin-bottom:8px">
+      Username
+      <input type="text" id="admin-user" autocomplete="username"
+             style="display:block;width:100%;background:#0f1a2e;color:#e0e0e0;border:1px solid #2a3a55;padding:6px 8px;font-family:inherit;border-radius:3px">
+    </label>
+    <label style="display:block;margin-bottom:12px">
+      Password
+      <input type="password" id="admin-pass" autocomplete="current-password"
+             style="display:block;width:100%;background:#0f1a2e;color:#e0e0e0;border:1px solid #2a3a55;padding:6px 8px;font-family:inherit;border-radius:3px">
+    </label>
+    <div class="muted" id="admin-error" style="color:#e94560;font-size:12px;min-height:16px;margin-bottom:8px"></div>
+    <menu style="display:flex;gap:8px;justify-content:flex-end">
+      <button type="button" class="btn" id="admin-cancel">Cancel</button>
+      <button type="submit" class="btn primary">Login</button>
+    </menu>
+  </form>
+</dialog>
 
 <main class="layout">
 
@@ -29,16 +55,20 @@
       <h2>Tool</h2>
       <div class="tool-row">
         <label><input type="radio" name="tool" value="paint-tile" checked> Paint tile</label>
-        <label><input type="radio" name="tool" value="place-entity"> Place entity</label>
-        <label><input type="radio" name="tool" value="erase-entity"> Erase entity</label>
+        <label><input type="radio" name="tool" value="place-spawn">
+          <strong style="color:#2ecc71">Place player start</strong>
+          <span id="spawn-counter" class="muted">0/4</span></label>
+        <label><input type="radio" name="tool" value="place-model"> Place model</label>
+        <label><input type="radio" name="tool" value="place-crate"> Place crate</label>
+        <label><input type="radio" name="tool" value="erase-entity"> Erase</label>
       </div>
     </section>
 
     <section class="panel" id="panel-tile-tools">
       <h2>Tile</h2>
       <div class="tile-row">
-        <label>Texture
-          <input type="number" id="tile-texture" min="0" max="255" value="0">
+        <label>Texture #
+          <input type="number" id="tile-texture" min="0" value="0">
         </label>
         <label>Depth
           <input type="number" id="tile-depth" min="0" max="15" value="0">
@@ -52,40 +82,35 @@
           </select>
         </label>
       </div>
-      <div class="palette">
-        <span>Quick:</span>
-        <button class="swatch" data-tex="0" data-color="#3a7d3a">Grass 0</button>
-        <button class="swatch" data-tex="1" data-color="#86736a">Path 1</button>
-        <button class="swatch" data-tex="2" data-color="#3b5a8c">Water 2</button>
-        <button class="swatch" data-tex="3" data-color="#5a5a5a">Stone 3</button>
-        <button class="swatch" data-tex="4" data-color="#888888">Concrete 4</button>
-        <button class="swatch" data-tex="5" data-color="#c4a25c">Sand 5</button>
-        <button class="swatch" data-tex="6" data-color="#444">Asphalt 6</button>
+      <div class="muted" style="font-size:11px">
+        Click any swatch in the texture palette below the canvas to set the active texture.
       </div>
     </section>
 
     <section class="panel" id="panel-entity-tools">
-      <h2>Entity</h2>
+      <h2>Entity options</h2>
       <div class="tile-row">
-        <label>Type
-          <select id="entity-type">
-            <option value="player_spawn">Player Spawn</option>
-            <option value="model">Model (decoration)</option>
-            <option value="crate">Crate (pickup)</option>
-          </select>
-        </label>
         <label>Direction (deg)
           <input type="number" id="entity-direction" min="0" max="359" value="0">
         </label>
+        <span class="muted" style="font-size:11px">facing applied to placed spawns / models</span>
       </div>
       <div class="tile-row" id="row-entity-model">
-        <label>Model index
-          <input type="number" id="entity-model" min="0" max="255" value="0">
-          <span class="muted">(Reserved[1])</span>
+        <label>Model
+          <select id="entity-model">
+            <option value="0">0 — CRATE</option>
+            <option value="1">1 — PLAYER</option>
+            <option value="2">2 — TREE</option>
+            <option value="3">3 — WALL</option>
+            <option value="4">4 — WALL2</option>
+            <option value="5">5 — WALL3</option>
+            <option value="6">6 — BOMB</option>
+          </select>
+          <span class="muted" style="font-size:11px">stored in Reserved[1]</span>
         </label>
       </div>
       <div class="tile-row" id="row-entity-crate-flags">
-        <span>Crate contains:</span>
+        <span>Crate contents:</span>
         <label><input type="checkbox" id="crate-flag-health" checked> Health</label>
         <label><input type="checkbox" id="crate-flag-bomb"   checked> Bomb</label>
         <label><input type="checkbox" id="crate-flag-mine"   checked> Mine</label>
@@ -106,12 +131,33 @@
   </aside>
 
   <section class="canvas-wrap">
-    <canvas id="map-canvas" width="640" height="640"></canvas>
-    <div class="canvas-legend">
-      <span class="lg-spawn">●</span> Player spawn &nbsp;
-      <span class="lg-model">■</span> Model &nbsp;
-      <span class="lg-crate">◆</span> Crate
+    <div class="view-tabs">
+      <button class="view-tab active" data-view="2d">2D Editor</button>
+      <button class="view-tab" data-view="3d">3D Preview</button>
+      <span class="view-help muted">3D: drag = orbit, wheel = zoom, right-drag = pan</span>
     </div>
+    <div class="view-pane view-2d active">
+      <canvas id="map-canvas" width="640" height="640"></canvas>
+      <div class="canvas-legend">
+        <span class="lg-spawn">●</span> Player spawn &nbsp;
+        <span class="lg-model">■</span> Model &nbsp;
+        <span class="lg-crate">◆</span> Crate
+      </div>
+    </div>
+    <div class="view-pane view-3d">
+      <div id="three-mount"></div>
+      <div class="three-overlay">
+        <button id="btn-3d-recenter" class="btn">Re-center camera</button>
+        <label><input type="checkbox" id="chk-show-grid" checked> Grid</label>
+        <label><input type="checkbox" id="chk-show-entities" checked> Entities</label>
+        <label><input type="checkbox" id="chk-show-gouraud" checked> Gouraud lighting</label>
+      </div>
+    </div>
+
+    <details class="texture-palette-detail">
+      <summary>Texture palette (click to set tile texture)</summary>
+      <div id="texture-palette" class="texture-palette"></div>
+    </details>
   </section>
 
   <aside class="entity-list-pane panel">
@@ -133,6 +179,17 @@
 
 <div id="toast" class="toast hidden"></div>
 
+<!-- Three.js + OrbitControls. Pinned to specific versions so the
+     cached editor stays reproducible regardless of CDN drift. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module" src="/static/editor3d.js"></script>
 <script src="/static/editor.js"></script>
 </body>
 </html>

@@ -261,6 +261,11 @@ function tileFromEvent(ev) {
   };
 }
 
+function countSpawns() {
+  return level.entities.filter(e =>
+    e.type === 'player_spawn' || e.type_id === 1).length;
+}
+
 function applyToolAt(x, y) {
   const tool = $('input[name="tool"]:checked').value;
 
@@ -276,8 +281,18 @@ function applyToolAt(x, y) {
     };
   }
 
-  else if (tool === 'place-entity') {
-    const type = $('#entity-type').value;
+  else if (tool === 'place-spawn' || tool === 'place-model' || tool === 'place-crate') {
+    let type;
+    if (tool === 'place-spawn') type = 'player_spawn';
+    else if (tool === 'place-model') type = 'model';
+    else type = 'crate';
+
+    // Engine cap: UNET_MAX_PLAYERS = 4. Block extra spawns.
+    if (type === 'player_spawn' && countSpawns() >= MAX_PLAYER_SPAWNS) {
+      toast(`Player start limit (${MAX_PLAYER_SPAWNS}) reached — match supports up to 4 players`, true);
+      return;
+    }
+
     const dirDeg = parseInt($('#entity-direction').value, 10) || 0;
     const reserved = new Array(16).fill(0);
     if (type === 'crate') {
@@ -314,6 +329,22 @@ function applyToolAt(x, y) {
 
   drawAll();
   refreshSidebar();
+  refreshToolUi();
+  if (window._afterEdit) window._afterEdit();
+}
+
+function refreshToolUi() {
+  // Show/hide entity option rows based on which place tool is active.
+  const tool = $('input[name="tool"]:checked').value;
+  const showModel = (tool === 'place-model' || tool === 'place-crate');
+  const showCrate = (tool === 'place-crate');
+  $('#row-entity-model').style.display = showModel ? '' : 'none';
+  $('#row-entity-crate-flags').style.display = showCrate ? '' : 'none';
+  // Spawn-cap counter
+  const spawn = countSpawns();
+  const counter = $('#spawn-counter');
+  counter.textContent = `${spawn}/${MAX_PLAYER_SPAWNS}`;
+  counter.style.color = spawn >= MAX_PLAYER_SPAWNS ? '#e94560' : '#888';
 }
 
 let isPainting = false;
@@ -483,6 +514,8 @@ async function refreshLoadDialog() {
       const dt = m.updated_at
         ? new Date(m.updated_at * 1000).toLocaleString()
         : '—';
+      // Delete button rendered hidden by default; applyAdminUi() un-
+      // hides for admins. Open / Clone are always available.
       li.innerHTML = `
         <div>
           <div><strong>${escapeHtml(m.name || m.slug)}</strong></div>
@@ -490,7 +523,8 @@ async function refreshLoadDialog() {
         </div>
         <div>
           <button class="btn" data-load="${escapeAttr(m.slug)}">Open</button>
-          <button class="del-btn" data-del="${escapeAttr(m.slug)}">×</button>
+          <button class="btn" data-clone="${escapeAttr(m.slug)}" title="Clone this map and edit as your own">Clone</button>
+          <button class="del-btn ${isAdmin ? '' : 'hidden'}" data-del="${escapeAttr(m.slug)}" title="Delete (admin only)">×</button>
         </div>`;
       ul.appendChild(li);
     });
@@ -507,17 +541,50 @@ async function refreshLoadDialog() {
         }
       });
     });
+    ul.querySelectorAll('[data-clone]').forEach(b => {
+      b.addEventListener('click', async (ev) => {
+        ev.stopPropagation();
+        const slug = b.getAttribute('data-clone');
+        try {
+          const data = await api('GET', `/api/maps/${encodeURIComponent(slug)}`);
+          // Generate a new name. Suggest "<original> (copy)" so the
+          // resulting slug differs and Save creates a fresh entry.
+          const base = (data.meta && data.meta.name) || slug;
+          const newName = await promptNewMapName(`${base} (copy)`);
+          if (!newName) return;     // user cancelled
+          // Reset metadata to mark this as a clone owned by the cloner.
+          data.meta = data.meta || {};
+          data.meta.name        = newName;
+          data.meta.author      = $('#map-author').value || data.meta.author || '';
+          data.meta.description = `Cloned from ${slug}`;
+          loadLevelData(data);
+          $('#load-dialog').close();
+          toast(`Cloned ${slug} → "${newName}". Edit and Save to keep.`);
+        } catch (e) {
+          toast(`Clone failed: ${e.message}`, true);
+        }
+      });
+    });
     ul.querySelectorAll('[data-del]').forEach(b => {
       b.addEventListener('click', async (ev) => {
         ev.stopPropagation();
         const slug = b.getAttribute('data-del');
-        if (!confirm(`Delete ${slug}?`)) return;
+        if (!isAdmin) {
+          toast('Admin mode required to delete maps', true);
+          return;
+        }
+        if (!confirm(`Delete ${slug}? This cannot be undone.`)) return;
         try {
           await api('DELETE', `/api/maps/${encodeURIComponent(slug)}`);
           toast(`Deleted ${slug}`);
           await refreshLoadDialog();
         } catch (e) {
-          toast(`Delete failed: ${e.message}`, true);
+          if (e.status === 403) {
+            toast('Admin mode required to delete maps', true);
+            isAdmin = false; applyAdminUi();
+          } else {
+            toast(`Delete failed: ${e.message}`, true);
+          }
         }
       });
     });
@@ -540,7 +607,8 @@ function loadLevelData(data) {
   $('#map-name').value   = (level.meta && level.meta.name)   || '';
   $('#map-author').value = (level.meta && level.meta.author) || '';
   selectedEntityIdx = -1;
-  drawAll(); refreshSidebar();
+  drawAll(); refreshSidebar(); refreshToolUi();
+  if (window._afterEdit) window._afterEdit();
 }
 
 
@@ -565,6 +633,18 @@ function showValidation(errors, warnings) {
 }
 
 
+// ---- prompt for a new map name (used by Clone) -------------------------
+
+async function promptNewMapName(suggestion) {
+  // Native prompt is fine here — uniform across browsers, doesn't need
+  // a custom modal. User can edit / cancel.
+  const v = window.prompt('Name for the cloned map:', suggestion || '');
+  if (v === null) return null;
+  const trimmed = v.trim();
+  return trimmed || null;
+}
+
+
 // ---- escaping ----------------------------------------------------------
 
 function escapeHtml(s) {
@@ -574,32 +654,188 @@ function escapeHtml(s) {
 function escapeAttr(s) { return escapeHtml(s); }
 
 
-// ---- swatch palette wiring --------------------------------------------
+// ---- tool-radio change wiring ----------------------------------------
 
-$$('.swatch').forEach(b => {
-  b.style.background = b.getAttribute('data-color');
-  b.addEventListener('click', () => {
-    $$('.swatch').forEach(x => x.classList.remove('active'));
-    b.classList.add('active');
-    $('#tile-texture').value = b.getAttribute('data-tex');
-  });
+$$('input[name="tool"]').forEach(r => {
+  r.addEventListener('change', refreshToolUi);
 });
 
 
-// ---- entity-type panel toggle -----------------------------------------
+// ---- admin mode --------------------------------------------------------
+//
+// Admin status is server-authoritative (Flask session cookie). We mirror
+// it client-side just to drive UI visibility — the server enforces the
+// gate independently on every DELETE request.
 
-function refreshEntityToolUi() {
-  const t = $('#entity-type').value;
-  $('#row-entity-model').style.display       = (t === 'model' || t === 'crate') ? '' : 'none';
-  $('#row-entity-crate-flags').style.display = (t === 'crate') ? '' : 'none';
+let isAdmin = false;
+
+async function refreshAdminStatus() {
+  try {
+    const r = await api('GET', '/api/admin/status');
+    isAdmin = !!r.is_admin;
+  } catch { isAdmin = false; }
+  applyAdminUi();
 }
-$('#entity-type').addEventListener('change', refreshEntityToolUi);
+
+function applyAdminUi() {
+  $('#admin-badge').classList.toggle('hidden', !isAdmin);
+  const btn = $('#btn-admin');
+  if (isAdmin) {
+    btn.textContent = 'Logout admin';
+    btn.classList.add('active');
+  } else {
+    btn.textContent = 'Admin Mode';
+    btn.classList.remove('active');
+  }
+  // Hide delete buttons in the load dialog if not admin
+  $$('.del-btn').forEach(b => b.classList.toggle('hidden', !isAdmin));
+}
+
+async function adminLogin(username, password) {
+  try {
+    await api('POST', '/api/admin/login', { username, password });
+    isAdmin = true;
+    applyAdminUi();
+    toast('Admin mode enabled');
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
+async function adminLogout() {
+  try {
+    await api('POST', '/api/admin/logout');
+  } catch { /* ignore */ }
+  isAdmin = false;
+  applyAdminUi();
+  toast('Logged out of admin mode');
+}
+
+$('#btn-admin').addEventListener('click', () => {
+  if (isAdmin) {
+    if (confirm('Log out of admin mode?')) adminLogout();
+  } else {
+    $('#admin-error').textContent = '';
+    $('#admin-user').value = '';
+    $('#admin-pass').value = '';
+    $('#admin-dialog').showModal();
+    setTimeout(() => $('#admin-user').focus(), 50);
+  }
+});
+
+$('#admin-cancel').addEventListener('click', () => {
+  $('#admin-dialog').close();
+});
+
+$('#admin-form').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const u = $('#admin-user').value;
+  const p = $('#admin-pass').value;
+  const ok = await adminLogin(u, p);
+  if (ok) {
+    $('#admin-dialog').close();
+    // Reflect new admin state in any open Load dialog
+    if ($('#load-dialog').open) refreshLoadDialog();
+  } else {
+    $('#admin-error').textContent = 'Invalid credentials';
+  }
+});
+
+
+// ---- texture palette (loaded from server) ------------------------------
+
+let textureInfo = [];   // [{index, width, height}, ...] from /api/textures
+
+async function loadTexturePalette() {
+  try {
+    const r = await api('GET', '/api/textures');
+    textureInfo = r.textures || [];
+    renderTexturePalette();
+    // Cap the texture index spinner to the actual count
+    const spinner = $('#tile-texture');
+    if (spinner && textureInfo.length > 0) {
+      spinner.max = String(textureInfo.length - 1);
+    }
+  } catch (e) {
+    console.warn('texture palette: ' + e.message);
+  }
+}
+
+function renderTexturePalette() {
+  const div = $('#texture-palette');
+  if (!div) return;
+  div.innerHTML = '';
+  textureInfo.forEach(t => {
+    const cell = document.createElement('button');
+    cell.className = 'tex-cell';
+    cell.title = `Texture ${t.index} (${t.width}x${t.height})`;
+    cell.dataset.tex = t.index;
+    const img = document.createElement('img');
+    img.src = `/api/textures/${t.index}.png`;
+    img.alt = `tex ${t.index}`;
+    cell.appendChild(img);
+    const lbl = document.createElement('span');
+    lbl.className = 'tex-cell-label';
+    lbl.textContent = String(t.index);
+    cell.appendChild(lbl);
+    cell.addEventListener('click', () => {
+      $('#tile-texture').value = t.index;
+      $$('.tex-cell').forEach(c => c.classList.remove('active'));
+      cell.classList.add('active');
+    });
+    div.appendChild(cell);
+  });
+}
+
+
+// ---- view tab switcher (2D <-> 3D) -------------------------------------
+
+function setupViewTabs() {
+  $$('.view-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const view = tab.dataset.view;
+      $$('.view-tab').forEach(t => t.classList.toggle('active', t === tab));
+      $$('.view-pane').forEach(p =>
+        p.classList.toggle('active', p.classList.contains('view-' + view)));
+      // Tell the 3D module to refresh + handle its first init
+      if (view === '3d' && window.utenyaa3D) {
+        window.utenyaa3D.show();
+      } else if (window.utenyaa3D) {
+        window.utenyaa3D.hide();
+      }
+    });
+  });
+}
+
+
+// ---- expose level state for the 3D module -----------------------------
+
+// editor3d.js reads from window.utenyaaState rather than importing this
+// module (separate <script> contexts).
+window.utenyaaState = {
+  getLevel: () => level,
+  getTextures: () => textureInfo,
+  onLevelChange: null,
+};
+
+// Hook drawAll so any 2D edit also refreshes the 3D scene
+const _origDrawAll = drawAll;
+window._afterEdit = () => {
+  if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
+    window.utenyaa3D.refreshFromLevel();
+  }
+};
 
 
 // ---- boot --------------------------------------------------------------
 
 window.addEventListener('DOMContentLoaded', () => {
-  refreshEntityToolUi();
+  refreshToolUi();
   drawAll();
   refreshSidebar();
+  if (window._afterEdit) window._afterEdit();
+  setupViewTabs();
+  loadTexturePalette();
+  refreshAdminStatus();
 });
