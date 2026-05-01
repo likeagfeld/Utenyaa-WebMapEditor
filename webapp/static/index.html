@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Utenyaa Map Editor</title>
+<link rel="stylesheet" href="/static/editor.css">
+</head>
+<body>
+
+<header class="topbar">
+  <h1>Utenyaa Map Editor</h1>
+  <div class="topbar-actions">
+    <input type="text" id="map-name" placeholder="Map name" maxlength="32">
+    <input type="text" id="map-author" placeholder="Author" maxlength="24">
+    <button id="btn-new"     class="btn">New</button>
+    <button id="btn-load"    class="btn">Load…</button>
+    <button id="btn-save"    class="btn primary">Save</button>
+    <button id="btn-validate" class="btn">Validate</button>
+    <button id="btn-download" class="btn">Download .UTE</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <aside class="sidebar">
+
+    <section class="panel">
+      <h2>Tool</h2>
+      <div class="tool-row">
+        <label><input type="radio" name="tool" value="paint-tile" checked> Paint tile</label>
+        <label><input type="radio" name="tool" value="place-entity"> Place entity</label>
+        <label><input type="radio" name="tool" value="erase-entity"> Erase entity</label>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-tile-tools">
+      <h2>Tile</h2>
+      <div class="tile-row">
+        <label>Texture
+          <input type="number" id="tile-texture" min="0" max="255" value="0">
+        </label>
+        <label>Depth
+          <input type="number" id="tile-depth" min="0" max="15" value="0">
+        </label>
+        <label>Rotate
+          <select id="tile-rotation">
+            <option value="0">0°</option>
+            <option value="1">90°</option>
+            <option value="2">180°</option>
+            <option value="3">270°</option>
+          </select>
+        </label>
+      </div>
+      <div class="palette">
+        <span>Quick:</span>
+        <button class="swatch" data-tex="0" data-color="#3a7d3a">Grass 0</button>
+        <button class="swatch" data-tex="1" data-color="#86736a">Path 1</button>
+        <button class="swatch" data-tex="2" data-color="#3b5a8c">Water 2</button>
+        <button class="swatch" data-tex="3" data-color="#5a5a5a">Stone 3</button>
+        <button class="swatch" data-tex="4" data-color="#888888">Concrete 4</button>
+        <button class="swatch" data-tex="5" data-color="#c4a25c">Sand 5</button>
+        <button class="swatch" data-tex="6" data-color="#444">Asphalt 6</button>
+      </div>
+    </section>
+
+    <section class="panel" id="panel-entity-tools">
+      <h2>Entity</h2>
+      <div class="tile-row">
+        <label>Type
+          <select id="entity-type">
+            <option value="player_spawn">Player Spawn</option>
+            <option value="model">Model (decoration)</option>
+            <option value="crate">Crate (pickup)</option>
+          </select>
+        </label>
+        <label>Direction (deg)
+          <input type="number" id="entity-direction" min="0" max="359" value="0">
+        </label>
+      </div>
+      <div class="tile-row" id="row-entity-model">
+        <label>Model index
+          <input type="number" id="entity-model" min="0" max="255" value="0">
+          <span class="muted">(Reserved[1])</span>
+        </label>
+      </div>
+      <div class="tile-row" id="row-entity-crate-flags">
+        <span>Crate contains:</span>
+        <label><input type="checkbox" id="crate-flag-health" checked> Health</label>
+        <label><input type="checkbox" id="crate-flag-bomb"   checked> Bomb</label>
+        <label><input type="checkbox" id="crate-flag-mine"   checked> Mine</label>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Map info</h2>
+      <div class="info-grid">
+        <div>Size <span id="info-size">9624 B</span></div>
+        <div>Entities <span id="info-entities">0</span></div>
+        <div>Spawns <span id="info-spawns">0</span></div>
+        <div>Crates <span id="info-crates">0</span></div>
+      </div>
+      <div id="validation-output" class="validation"></div>
+    </section>
+
+  </aside>
+
+  <section class="canvas-wrap">
+    <canvas id="map-canvas" width="640" height="640"></canvas>
+    <div class="canvas-legend">
+      <span class="lg-spawn">●</span> Player spawn &nbsp;
+      <span class="lg-model">■</span> Model &nbsp;
+      <span class="lg-crate">◆</span> Crate
+    </div>
+  </section>
+
+  <aside class="entity-list-pane panel">
+    <h2>Entities</h2>
+    <ul id="entity-list" class="entity-list"></ul>
+  </aside>
+
+</main>
+
+<dialog id="load-dialog">
+  <form method="dialog" class="dialog-content">
+    <h2>Load map</h2>
+    <ul id="load-list" class="load-list"></ul>
+    <menu>
+      <button value="cancel">Cancel</button>
+    </menu>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+
+<script src="/static/editor.js"></script>
+</body>
+</html>

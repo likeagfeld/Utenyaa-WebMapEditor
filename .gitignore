@@ -1,0 +1,5 @@
+PawCraft_upstream/
+webapp/maps/
+.venv/
+__pycache__/
+*.pyc
