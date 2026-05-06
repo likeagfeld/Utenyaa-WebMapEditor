@@ -186,12 +186,16 @@ function onResize() {
 }
 
 function recenterCamera() {
-  // Engine sets viewpoint=(0,20,120) target=(0,30,0) per main.cxx.
-  // World scale: 8 units / tile × 20 tiles = 160-unit arena. Pick a
-  // camera position that frames the whole arena at a Utenyaa-like
-  // pitch (~30° down).
+  // Mirror the engine's screen-space orientation. The engine
+  // (Player.hpp HandleMovement comments) renders world +X to screen
+  // LEFT after its rotate_x(0.5) + translate(-10,-10,0) chain. With
+  // a Three.js perspective camera and up=(0,0,1) (Z up), placing the
+  // camera on the +Y side and looking back toward -Y makes the cross
+  // product right = forward × up resolve to a (-X, 0, 0) screen-right
+  // axis — i.e. world +X projects to screen LEFT, matching the engine.
+  // Pitch ~30° down to keep the Utenyaa-style angle.
   const cx = MAP_DIM * TILE_WORLD / 2;
-  camera.position.set(cx, -cx * 0.35, cx * 1.1);
+  camera.position.set(cx, cx * 2 + cx * 0.35, cx * 1.1);
   camera.up.set(0, 0, 1);
   camera.lookAt(cx, cx, 0);
 }

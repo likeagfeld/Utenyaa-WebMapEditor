@@ -110,36 +110,55 @@ function unpackTileRotation(raw) { return (raw >> 6) & 3; }
 const canvas = $('#map-canvas');
 const ctx    = canvas.getContext('2d');
 
+// View orientation: the Saturn engine renders the map with world +X
+// going to screen LEFT (camera + rotate_x(0.5) + translate(-10,-10,0)
+// chain — see Player.hpp HandleMovement comments). The editor canvas
+// is conventional: canvas X+ = screen RIGHT. To make WYSIWYG match
+// what the player sees in-game we mirror tile X on draw and unmirror
+// on click. Single source of truth — flip this constant if the engine
+// camera ever changes.
+const VIEW_MIRROR_X = true;
+function tileToCanvasX(tx) {
+  return (VIEW_MIRROR_X ? (MAP_DIM - 1 - tx) : tx) * TILE_PX;
+}
+function canvasXToTile(cx) {
+  const raw = Math.floor(cx / TILE_PX);
+  return VIEW_MIRROR_X ? (MAP_DIM - 1 - raw) : raw;
+}
+
 function drawAll() {
   ctx.fillStyle = '#0a0a14';
   ctx.fillRect(0, 0, CANVAS_PX, CANVAS_PX);
 
-  // Tile cells
+  // Tile cells. Tile coords (x,y) are AUTHORING coords — they go into
+  // the .UTE file as-is. The canvas position uses tileToCanvasX() to
+  // mirror so the editor view matches the in-game orientation.
   for (let y = 0; y < MAP_DIM; y++) {
     for (let x = 0; x < MAP_DIM; x++) {
       const idx = x + y * MAP_DIM;
       const t = level.tiles[idx];
+      const cxPx = tileToCanvasX(x);
       const color = TILE_COLORS[t.texture] || DEFAULT_TILE_COLOR;
       ctx.fillStyle = color;
-      ctx.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+      ctx.fillRect(cxPx, y * TILE_PX, TILE_PX, TILE_PX);
 
       // Depth shading — darker for higher depth (Z up)
       const depth = unpackTileDepth(t.raw);
       if (depth > 0) {
         ctx.fillStyle = `rgba(0,0,0,${Math.min(depth/15 * 0.5, 0.5)})`;
-        ctx.fillRect(x * TILE_PX, y * TILE_PX, TILE_PX, TILE_PX);
+        ctx.fillRect(cxPx, y * TILE_PX, TILE_PX, TILE_PX);
       }
 
       // Texture index small label
       ctx.fillStyle = 'rgba(255,255,255,0.5)';
       ctx.font = '9px monospace';
-      ctx.fillText(String(t.texture), x*TILE_PX + 2, y*TILE_PX + 10);
+      ctx.fillText(String(t.texture), cxPx + 2, y*TILE_PX + 10);
 
       // Rotation indicator (small triangle)
       const rot = unpackTileRotation(t.raw);
       if (rot !== 0) {
         ctx.save();
-        ctx.translate(x*TILE_PX + TILE_PX/2, y*TILE_PX + TILE_PX/2);
+        ctx.translate(cxPx + TILE_PX/2, y*TILE_PX + TILE_PX/2);
         ctx.rotate(rot * Math.PI / 2);
         ctx.fillStyle = 'rgba(255,255,255,0.4)';
         ctx.beginPath();
@@ -168,7 +187,10 @@ function drawAll() {
 }
 
 function drawEntity(e, idx) {
-  const cx = e.x * TILE_PX + TILE_PX/2;
+  // Mirror the canvas X so entities draw at their in-game screen
+  // position (engine: world +X = screen LEFT). Entity tile coords
+  // stored in `e.x` are authoring/wire coords — unchanged.
+  const cx = tileToCanvasX(e.x) + TILE_PX/2;
   const cy = e.y * TILE_PX + TILE_PX/2;
   const r = TILE_PX * 0.35;
   const isSel = idx === selectedEntityIdx;
@@ -255,8 +277,10 @@ function tileFromEvent(ev) {
   const sy = canvas.height / rect.height;
   const cx = (ev.clientX - rect.left) * sx;
   const cy = (ev.clientY - rect.top) * sy;
+  // canvasXToTile undoes the X mirror so authored tile coords still
+  // correspond to where the user clicked on the (mirrored) canvas.
   return {
-    x: Math.max(0, Math.min(MAP_DIM - 1, Math.floor(cx / TILE_PX))),
+    x: Math.max(0, Math.min(MAP_DIM - 1, canvasXToTile(cx))),
     y: Math.max(0, Math.min(MAP_DIM - 1, Math.floor(cy / TILE_PX))),
   };
 }
