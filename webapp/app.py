@@ -53,6 +53,24 @@ DEFAULT_MAPS_DIR = os.environ.get(
 # tool with trusted operators. Override via env var when deploying.
 DEFAULT_ADMIN_USERNAME = os.environ.get("UTENYAA_ADMIN_USER", "admin")
 DEFAULT_ADMIN_PASSWORD = os.environ.get("UTENYAA_ADMIN_PASS", "coup2025")
+# Two deployment modes drive admin behavior:
+#
+#   UTENYAA_AUTO_ADMIN=1   (used by the saturn-admin /admin/editor/ mount)
+#       Every visitor is automatically an admin — they got past the
+#       upstream basic-auth gate so they're trusted. /api/admin/status
+#       returns is_admin=true unconditionally.
+#
+#   UTENYAA_PUBLIC_MODE=1  (used by the unauth /mapeditor/ mount)
+#       No upstream gate. Visitors are NEVER admins, regardless of any
+#       login attempt — destructive ops like map delete return 403.
+#       The editor's own login modal is also hidden via CSS so users
+#       don't see a redundant prompt.
+#
+# Default (neither set): standalone tool — original behavior. User
+# starts as non-admin, can promote via /api/admin/login with the
+# username/password env vars.
+AUTO_ADMIN  = os.environ.get("UTENYAA_AUTO_ADMIN",  "0") not in ("0", "", "false", "False")
+PUBLIC_MODE = os.environ.get("UTENYAA_PUBLIC_MODE", "0") not in ("0", "", "false", "False")
 # Persist across server restarts so existing admin sessions survive.
 DEFAULT_SESSION_SECRET = os.environ.get(
     "UTENYAA_SESSION_SECRET",
@@ -225,6 +243,12 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
     app.config["MODELS"] = model_cache
 
     def _is_admin() -> bool:
+        # PUBLIC_MODE forcibly denies admin regardless of session state —
+        # destructive ops (delete) always 403. AUTO_ADMIN forcibly grants
+        # admin for any visitor — they got past the upstream auth gate.
+        # Otherwise honor the per-session flag set by /api/admin/login.
+        if PUBLIC_MODE: return False
+        if AUTO_ADMIN:  return True
         return bool(session.get("is_admin"))
 
     @app.route("/")
@@ -303,10 +327,20 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
 
     @app.route("/api/admin/status", methods=["GET"])
     def admin_status():
-        return jsonify({"is_admin": _is_admin()})
+        # Editor frontend reads this on load to decide UI affordances
+        # (delete buttons visible when admin). Includes the deploy-time
+        # mode flags so the editor can adjust behavior — public_mode
+        # disables admin promotion entirely.
+        return jsonify({
+            "is_admin": _is_admin(),
+            "public_mode": PUBLIC_MODE,
+            "auto_admin":  AUTO_ADMIN,
+        })
 
     @app.route("/api/admin/login", methods=["POST"])
     def admin_login():
+        if PUBLIC_MODE:
+            return jsonify({"error": "public_mode"}), 403
         body = request.get_json(silent=True) or {}
         u = body.get("username", "")
         p = body.get("password", "")
@@ -346,6 +380,43 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
                 "Content-Length": str(len(data)),
             },
         )
+
+    @app.route("/api/maps/<slug>/mirror_x", methods=["POST"])
+    def mirror_map_x_endpoint(slug):
+        """Mirror an already-saved map across its X axis. Idempotent —
+        running twice produces the original. Same logic as the
+        standalone mirror_map_x.py script: reverse each row of
+        TileData/Gourad/Normals, negate normal.x, flip entity X.
+        Useful for fixing maps authored in a wrong-orientation editor
+        OR for trying out a horizontally flipped variant of an
+        existing map. The save endpoint protects against race-by-
+        cached-tab by NOT auto-reloading; client must re-fetch."""
+        from mirror_map_x import mirror as _mirror_level
+        try:
+            data = store.load(slug)
+        except FileNotFoundError:
+            abort(404)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        try:
+            level = level_from_json(data)
+        except Exception as e:
+            return jsonify({"error": f"load failed: {e}"}), 400
+        _mirror_level(level)
+        # Re-save through the normal storage path so both .UTE and
+        # .json sidecar are kept in lock-step.
+        body = level_to_json(level)
+        # Preserve metadata that level_to_json may not carry forward.
+        for k in ("name", "author", "description"):
+            if k in data:
+                body[k] = data[k]
+        result = store.save(slug, body)
+        return jsonify({
+            "ok": True,
+            "slug": slug,
+            "entities": len(level.entities),
+            "ute_size_bytes": result.get("ute_size_bytes", 0),
+        })
 
     @app.route("/api/validate", methods=["POST"])
     def validate_only():

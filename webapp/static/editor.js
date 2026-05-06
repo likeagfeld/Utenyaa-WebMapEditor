@@ -518,6 +518,44 @@ $('#btn-download').addEventListener('click', async () => {
   }
 });
 
+// Mirror Map X — server-side X-axis flip on the saved file. Idempotent
+// (run twice = original). After the call we re-fetch the saved map so
+// the in-memory `level` reflects the flipped state — without this
+// re-fetch a subsequent Save would clobber the mirror with the user's
+// (un-flipped) in-memory cache. Race-protection: the same race that
+// re-mirroring shiro hit during the 0.6 deploy.
+$('#btn-mirror-x').addEventListener('click', async () => {
+  const name = $('#map-name').value.trim();
+  if (!name) { toast('Save the map first, then mirror', true); return; }
+  if (!confirm(
+        'Mirror the saved "' + name + '" map across its X axis?\n\n' +
+        'This rewrites the .UTE file on the server. Run twice to undo.\n' +
+        'A pre-mirror backup is created automatically the first time.')) {
+    return;
+  }
+  const slug = await slugifyOnServer(name);
+  try {
+    // Force-save first so the mirror operates on the user's latest
+    // edits, not a stale on-disk copy. Without this, a user who
+    // edited in-memory then clicked Mirror X would lose their
+    // unsaved changes when the mirror reloaded from disk.
+    await api('POST', `api/maps/${encodeURIComponent(slug)}?force=1`, level);
+    const r = await api('POST', `api/maps/${encodeURIComponent(slug)}/mirror_x`);
+    // Re-fetch the saved map so in-memory level reflects the flip;
+    // any pending unsaved edits the user made AFTER the force-save
+    // above would be lost — this is intentional, the confirm()
+    // above warned them. loadLevelData is the same path used by the
+    // Load… dialog so it's already wired to redraw both 2D + 3D.
+    const data = await api('GET', `api/maps/${encodeURIComponent(slug)}`);
+    loadLevelData(data);
+    drawAll();
+    toast('Mirrored: ' + r.entities + ' entities flipped, ' +
+          (r.ute_size_bytes||'?') + ' bytes');
+  } catch (e) {
+    toast('Mirror failed: ' + (e && e.message || e), true);
+  }
+});
+
 $('#btn-load').addEventListener('click', async () => {
   await refreshLoadDialog();
   $('#load-dialog').showModal();
@@ -694,15 +732,29 @@ $$('input[name="tool"]').forEach(r => {
 let isAdmin = false;
 
 async function refreshAdminStatus() {
-  // When the editor is mounted behind the saturncoup admin portal,
-  // every visitor IS an authenticated operator (nginx basic-auth gate
-  // + portal proxy) — there's no need for the editor's own admin
-  // login dance. Auto-grant admin so destructive ops (delete) work
-  // without an extra modal. The login UI is also hidden via CSS in
-  // index.html so visitors don't see a redundant "Admin Mode" button.
-  // Standalone deploys that need real per-user gating should re-enable
-  // the original `api/admin/status` round-trip.
-  isAdmin = true;
+  // Server-driven: /api/admin/status now reports is_admin + the
+  // deploy-time mode flags. Three modes are supported:
+  //   - admin portal (UTENYAA_AUTO_ADMIN=1): is_admin always true
+  //   - public mount (UTENYAA_PUBLIC_MODE=1): is_admin always false
+  //   - standalone:                          is_admin from session
+  // Frontend just trusts what the server returns; CSS in index.html
+  // already hides the admin-login UI for the admin-portal embed.
+  try {
+    const r = await api('GET', 'api/admin/status');
+    isAdmin = !!r.is_admin;
+    // Public mode also hides the admin button + dialog so users
+    // don't see a redundant "Admin Mode" prompt that can never
+    // succeed. (The CSS rule in index.html covers the auto-admin
+    // case; this script-side rule covers public mode where there
+    // is no upstream gate.)
+    if (r.public_mode) {
+      const css = document.createElement('style');
+      css.textContent = '#btn-admin,#admin-badge,#admin-dialog{display:none!important}';
+      document.head.appendChild(css);
+    }
+  } catch {
+    isAdmin = false;
+  }
   applyAdminUi();
 }
 
