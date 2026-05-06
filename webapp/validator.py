@@ -38,6 +38,17 @@ MAX_PLAYER_SPAWNS = 4     # UNET_MAX_PLAYERS
 RECOMMENDED_MIN_CRATES = 1
 MAX_TOTAL_ENTITIES = 64   # generous; production maps cap at 47
 
+# Saturn-side streaming cap (UNET_MAP_MAX_SIZE in utenyaa_protocol.h).
+# Maps larger than this get rejected by the server before streaming
+# AND would overflow the Saturn's RX buffer if they slipped through.
+# Bumping this cap requires a binary update on every Saturn — keep
+# this constant in sync with the protocol header.
+SATURN_MAP_MAX_BYTES = 16384
+
+# Soft warning threshold — author should know they're getting close
+# to the cap. 80% of cap.
+SATURN_MAP_WARN_BYTES = int(SATURN_MAP_MAX_BYTES * 0.80)
+
 
 def validate(L: LevelData, *, strict: bool = False) -> Tuple[List[str], List[str]]:
     """Run all checks. Returns (errors, warnings).
@@ -126,6 +137,31 @@ def validate(L: LevelData, *, strict: bool = False) -> Tuple[List[str], List[str
                 f"entity[{seen_xy[key]}] — players will spawn on top of each other")
         else:
             seen_xy[key] = i
+
+    # Saturn-streaming size cap. Compute the on-disk .UTE size now so
+    # we can flag oversized maps BEFORE they're saved (and certainly
+    # before they're pushed to the Saturn for live play).
+    try:
+        from ute_format import serialize as _serialize
+        ute_size = len(_serialize(L))
+    except Exception:
+        ute_size = 0
+
+    if ute_size > SATURN_MAP_MAX_BYTES:
+        errors.append(
+            f"map size {ute_size} bytes exceeds Saturn streaming cap "
+            f"({SATURN_MAP_MAX_BYTES} bytes / UNET_MAP_MAX_SIZE). The "
+            f"server will refuse to push it to clients. Reduce entity "
+            f"count to shrink (each entity is 28 bytes; the rest of "
+            f"the file is fixed-size)."
+        )
+    elif ute_size > SATURN_MAP_WARN_BYTES:
+        pct = 100.0 * ute_size / SATURN_MAP_MAX_BYTES
+        warnings.append(
+            f"map size {ute_size} bytes is {pct:.0f}% of Saturn cap "
+            f"({SATURN_MAP_MAX_BYTES} bytes). Adding more entities "
+            f"could push past the cap and block live streaming."
+        )
 
     if strict:
         errors += warnings
