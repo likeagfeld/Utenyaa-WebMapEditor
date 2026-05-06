@@ -658,6 +658,65 @@ $('#btn-load').addEventListener('click', async () => {
   $('#load-dialog').showModal();
 });
 
+/* ---- Auto-depth: smooth value-noise depth field across all tiles ----
+ *
+ * Each click reseeds with fresh random corner samples, bilinear-
+ * interpolated to per-tile depths in [0..amplitude]. Texture, mirror,
+ * and rotation are preserved — only the 4-bit depth field is rewritten.
+ * Refreshes both 2D canvas and 3D mesh.
+ *
+ * The 5x5 corner grid (4x4 cells across the 20x20 map = 5 tiles per
+ * cell) gives gentle rolling terrain — coarse enough to read as
+ * "layered" rather than chaotic, fine enough to vary every few tiles.
+ */
+$('#btn-auto-depth').addEventListener('click', () => {
+  const ampRaw = parseInt($('#auto-depth-amp').value, 10);
+  const amp = Math.max(1, Math.min(15, isNaN(ampRaw) ? 5 : ampRaw));
+  if (!confirm(
+        'Apply auto-depth to all 400 tiles?\n\n' +
+        'This overwrites the depth value of every tile with a smooth ' +
+        'random pattern (amplitude ' + amp + '). Texture, mirror, and ' +
+        'rotation are preserved. Click again for a different pattern.')) {
+    return;
+  }
+  const STEP = 5;
+  const corners = new Float32Array(STEP * STEP);
+  for (let i = 0; i < corners.length; i++) corners[i] = Math.random();
+  for (let y = 0; y < MAP_DIM; y++) {
+    for (let x = 0; x < MAP_DIM; x++) {
+      const fx = (x / (MAP_DIM - 1)) * (STEP - 1);
+      const fy = (y / (MAP_DIM - 1)) * (STEP - 1);
+      const x0 = Math.floor(fx), y0 = Math.floor(fy);
+      const x1 = Math.min(x0 + 1, STEP - 1);
+      const y1 = Math.min(y0 + 1, STEP - 1);
+      const tx = fx - x0, ty = fy - y0;
+      const v00 = corners[y0 * STEP + x0];
+      const v10 = corners[y0 * STEP + x1];
+      const v01 = corners[y1 * STEP + x0];
+      const v11 = corners[y1 * STEP + x1];
+      const v0 = v00 * (1 - tx) + v10 * tx;
+      const v1 = v01 * (1 - tx) + v11 * tx;
+      const v = v0 * (1 - ty) + v1 * ty;
+      const depth = Math.round(v * amp);
+      const idx = x + y * MAP_DIM;
+      const t = level.tiles[idx];
+      if (!t) continue;
+      const rot = unpackTileRotation(t.raw);
+      const mir = unpackTileMirror(t.raw);
+      level.tiles[idx] = {
+        raw: packTileRaw(depth, mir, rot),
+        texture: t.texture,
+        dummy:   t.dummy || 0,
+      };
+    }
+  }
+  drawAll();
+  if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
+    window.utenyaa3D.refreshFromLevel();
+  }
+  toast('Auto-depth applied (amplitude ' + amp + ')');
+});
+
 async function refreshLoadDialog() {
   const ul = $('#load-list');
   ul.innerHTML = '<li class="muted">Loading…</li>';

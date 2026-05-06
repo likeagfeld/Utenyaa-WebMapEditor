@@ -215,25 +215,32 @@ function init() {
     return -1;
   }
 
-  // ----- Persistent Rotate Mode + click-to-aim --------------------
-  // The 3D view has TWO modes:
+  // ----- Rotate Mode buttons (Tile vs Object, mutually exclusive) ---
+  // The 3D view has THREE click modes, switched via two toolbar
+  // buttons in the three-overlay:
   //
-  //   1. Normal (default): clicks apply the current toolbox tool
+  //   1. 'none' (default): clicks apply the current toolbox tool
   //      (Paint tile, Place spawn/model/crate, Erase). Drag = orbit.
   //
-  //   2. Rotate Mode (toggled via the "Rotate Mode" button): clicks
-  //      ROTATE the thing under the cursor instead of applying the
-  //      toolbox tool. Tile click → cycle 90° (4-state). Entity
-  //      click → enter "aim mode" where mouse motion re-aims the
-  //      entity until the next click commits it. ESC exits the
-  //      whole mode.
+  //   2. 'tile' (Rotate Tile button ON): clicks cycle the tile
+  //      texture rotation 90° (4-state) at the click point. ALWAYS
+  //      hits the tile, even when an entity sits on top of it —
+  //      this is how the operator rotates a tile under a wall/
+  //      crate/spawn. Mutually exclusive with 'object'.
   //
-  // The mode is persistent so the operator can rotate many things
-  // in a row without re-toggling. ESC cancels an in-progress aim
-  // first; a second ESC exits Rotate Mode entirely.
-  let _rotateModeActive = false;
-  let _aimEntityIdx     = -1;
-  let _aimOriginalDir   = 0;
+  //   3. 'object' (Rotate Object button ON): clicks on entities
+  //      enter aim mode (move mouse → re-aim, click → commit).
+  //      Clicks on empty tiles do nothing in this mode. Mutually
+  //      exclusive with 'tile'.
+  //
+  // Modes are persistent so the operator can rotate many things in
+  // a row without re-toggling. Clicking the active button toggles
+  // it back to 'none'. Clicking the OTHER button switches modes.
+  // ESC cancels an in-progress aim first; a second ESC exits the
+  // current rotate mode back to 'none'.
+  let _rotateMode    = 'none';   // 'none' | 'tile' | 'object'
+  let _aimEntityIdx  = -1;
+  let _aimOriginalDir = 0;
 
   function _setHelpHint(msg) {
     const el = document.querySelector('.view-help');
@@ -247,23 +254,35 @@ function init() {
       el.style.color = '';
     }
   }
-  function _setRotateMode(active) {
-    if (_rotateModeActive === active) return;
-    _rotateModeActive = active;
-    if (!active && _aimEntityIdx >= 0) _exitAimMode(false);
-    const btn = document.getElementById('btn-3d-rotate-mode');
-    if (btn) {
-      btn.textContent = 'Rotate Mode: ' + (active ? 'ON' : 'OFF');
-      btn.classList.toggle('primary', active);
-      btn.style.background = active ? '#f5a623' : '';
-      btn.style.color      = active ? '#000'     : '';
-    }
+  function _styleModeBtn(btn, active) {
+    if (!btn) return;
+    btn.classList.toggle('primary', active);
+    btn.style.background = active ? '#f5a623' : '';
+    btn.style.color      = active ? '#000'     : '';
+  }
+  function _setRotateMode(mode) {
+    if (mode !== 'none' && mode !== 'tile' && mode !== 'object') mode = 'none';
+    if (_rotateMode === mode) return;
+    /* Switching modes (or to 'none') — abort any in-progress aim
+     * to avoid leaving an entity stuck in aim state across modes. */
+    if (_aimEntityIdx >= 0) _exitAimMode(false);
+    _rotateMode = mode;
+    const btnTile = document.getElementById('btn-3d-rotate-tile');
+    const btnObj  = document.getElementById('btn-3d-rotate-object');
+    if (btnTile) btnTile.textContent = 'Rotate Tile: '   + (mode === 'tile'   ? 'ON' : 'OFF');
+    if (btnObj)  btnObj.textContent  = 'Rotate Object: ' + (mode === 'object' ? 'ON' : 'OFF');
+    _styleModeBtn(btnTile, mode === 'tile');
+    _styleModeBtn(btnObj,  mode === 'object');
     if (renderer && renderer.domElement) {
-      renderer.domElement.style.cursor = active ? 'crosshair' : '';
+      renderer.domElement.style.cursor = (mode !== 'none') ? 'crosshair' : '';
     }
-    _setHelpHint(active
-      ? 'ROTATE MODE — click tile to cycle 90° · click entity to aim (move + click) · ESC to exit'
-      : null);
+    if (mode === 'tile') {
+      _setHelpHint('ROTATE TILE — click cycles tile 90° (works through entities) · ESC to exit');
+    } else if (mode === 'object') {
+      _setHelpHint('ROTATE OBJECT — click entity = aim · ESC cancels aim · second ESC exits');
+    } else {
+      _setHelpHint(null);
+    }
   }
   function _enterAimMode(idx) {
     const level = window.utenyaaState && window.utenyaaState.getLevel();
@@ -287,18 +306,28 @@ function init() {
     if (visual) visual.scale.set(1, 1, 1);
     _aimEntityIdx = -1;
     if (controls) controls.enabled = true;
-    if (_rotateModeActive) {
-      _setHelpHint('ROTATE MODE — click tile to cycle 90° · click entity to aim (move + click) · ESC to exit');
+    if (_rotateMode === 'object') {
+      _setHelpHint('ROTATE OBJECT — click entity = aim · ESC cancels aim · second ESC exits');
+    } else if (_rotateMode === 'tile') {
+      _setHelpHint('ROTATE TILE — click cycles tile 90° (works through entities) · ESC to exit');
     } else {
       _setHelpHint(null);
     }
     if (typeof window.refreshSidebar === 'function') window.refreshSidebar();
   }
 
-  // Hook up the Rotate Mode button.
-  const _rotateBtn = document.getElementById('btn-3d-rotate-mode');
-  if (_rotateBtn) {
-    _rotateBtn.addEventListener('click', () => _setRotateMode(!_rotateModeActive));
+  // Hook up the two Rotate Mode buttons. Clicking the active button
+  // turns it OFF (back to 'none'). Clicking the other button switches
+  // modes — _setRotateMode handles the mutual exclusion.
+  const _rotateTileBtn = document.getElementById('btn-3d-rotate-tile');
+  const _rotateObjBtn  = document.getElementById('btn-3d-rotate-object');
+  if (_rotateTileBtn) {
+    _rotateTileBtn.addEventListener('click', () =>
+      _setRotateMode(_rotateMode === 'tile' ? 'none' : 'tile'));
+  }
+  if (_rotateObjBtn) {
+    _rotateObjBtn.addEventListener('click', () =>
+      _setRotateMode(_rotateMode === 'object' ? 'none' : 'object'));
   }
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
@@ -321,15 +350,23 @@ function init() {
     const t = _raycastTile();
     if (!t) return;
     const level = window.utenyaaState && window.utenyaaState.getLevel();
-    if (_rotateModeActive) {
-      // Rotate-mode click — left OR right both rotate. Right-click
-      // still also works in normal mode for one-shot rotation, see
-      // below.
+    if (_rotateMode === 'tile') {
+      /* Rotate Tile mode — click ALWAYS rotates the tile under the
+       * cursor 90°, even if an entity sits on top of it. The two-
+       * button design replaces the older Shift+click bypass — the
+       * mode is the bypass. */
+      if (typeof window.rotateAtTile === 'function') {
+        window.rotateAtTile(t.x, t.y, 90);
+      }
+      return;
+    }
+    if (_rotateMode === 'object') {
+      /* Rotate Object mode — click entity → enter aim mode. Click
+       * on empty tile is a no-op (helpful hint kept on the help
+       * span so the operator sees what's expected). */
       const entIdx = _entityAtTile(level, t.x, t.y);
       if (entIdx >= 0) {
         _enterAimMode(entIdx);
-      } else if (typeof window.rotateAtTile === 'function') {
-        window.rotateAtTile(t.x, t.y, 90);
       }
       return;
     }
@@ -374,25 +411,26 @@ function init() {
     const visual = groupEntities.children[_aimEntityIdx];
     if (visual) visual.rotation.z = snapped;
   });
-  // ESC: cancel in-progress aim FIRST; a second ESC exits Rotate Mode.
+  // ESC: cancel in-progress aim FIRST; a second ESC exits whatever
+  // rotate mode is active back to 'none'.
   window.addEventListener('keydown', (ev) => {
     if (ev.key !== 'Escape') return;
     if (_aimEntityIdx >= 0) {
       ev.preventDefault();
       _exitAimMode(false);
-    } else if (_rotateModeActive) {
+    } else if (_rotateMode !== 'none') {
       ev.preventDefault();
-      _setRotateMode(false);
+      _setRotateMode('none');
     }
   });
 
-  // Tool radio change → cancel any in-progress aim mode AND turn
-  // off Rotate Mode so the user's next click reflects their just-
-  // selected tool.
+  // Tool radio change → cancel any in-progress aim mode AND clear
+  // any Rotate Mode so the user's next click reflects their just-
+  // selected toolbox tool.
   document.querySelectorAll('input[name="tool"]').forEach((r) => {
     r.addEventListener('change', () => {
-      if (_aimEntityIdx >= 0) _exitAimMode(false);
-      if (_rotateModeActive)  _setRotateMode(false);
+      if (_aimEntityIdx >= 0)    _exitAimMode(false);
+      if (_rotateMode !== 'none') _setRotateMode('none');
     });
   });
 
@@ -497,22 +535,18 @@ function rebuildTerrain(level) {
       positions.push(wx, wy, z00,  wxe, wy, z10,  wxe, wye, z11,  wx, wye, z01);
 
       // UV: rotation+mirror per DepthAndRotationAndMirror byte.
-      // Engine (Map.hpp) uses `baseIndex = 3 - rotation` to permute
-      // the polygon's slot[0..3] vertex assignment; SGL then maps
-      // texture corners (0,0),(1,0),(1,1),(0,1) to slots 0..3 in
-      // order. Working out the math at rot=0 gives:
-      //   slot 0 = SE   →  texture (0,0)
-      //   slot 1 = SW   →  texture (1,0)
-      //   slot 2 = NW   →  texture (1,1)
-      //   slot 3 = NE   →  texture (0,1)
-      // Editor positions are pushed in NW,NE,SE,SW order, so to
-      // match Saturn output at rot=0 the base UV in that vertex
-      // order is [(1,1),(0,1),(0,0),(1,0)]. The previous
-      // [(0,0),(1,0),(1,1),(0,1)] base produced 180°-rotated
-      // textures vs the engine — symptom: corner-textured roads
-      // looked clean in editor but had chevron/arrow artifacts
-      // in-game. Each rotation step right-shifts the UV array,
-      // which matches the engine's baseIndex decrement.
+      // Empirically verified base — matches the Saturn engine on
+      // hardware. Earlier rederivation that "factored sprHVflip
+      // back to identity" was wrong (theoretical analysis missed
+      // something — likely the SGL polygon vertex slot order isn't
+      // the standard 0=TL,1=TR,2=BR,3=BL the docs imply, OR the
+      // textures land in VRAM in a way that the HV-flip doesn't
+      // actually cancel back to identity). Don't re-derive this
+      // from first principles again — verify on hardware.
+      // Editor positions are pushed in NW,NE,SE,SW order; this
+      // base is the on-hardware-verified pairing for that order
+      // at rot=0. Each rotation step right-shifts the UV array,
+      // matching the engine's baseIndex decrement.
       const rot = (tile.raw >> 6) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let uv = [[1,1], [0,1], [0,0], [1,0]];
