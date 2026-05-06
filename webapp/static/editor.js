@@ -1000,4 +1000,9 @@ window.addEventListener('DOMContentLoaded', () => {
   setupViewTabs();
   loadTexturePalette();
   refreshAdminStatus();
+  // 2D editor is hidden by default — boot directly into 3D so users
+  // see the WYSIWYG view immediately without clicking a tab. The 2D
+  // pane stays in the DOM (display:none) so its handlers/state stay
+  // wired and toggling it back is a one-line CSS change.
+  if (window.utenyaa3D) window.utenyaa3D.show();
 });

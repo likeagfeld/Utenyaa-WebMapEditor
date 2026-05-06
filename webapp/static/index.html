@@ -140,11 +140,15 @@
 
   <section class="canvas-wrap">
     <div class="view-tabs">
-      <button class="view-tab active" data-view="2d">2D Editor</button>
-      <button class="view-tab" data-view="3d">3D Editor</button>
+      <!-- 2D editor hidden behind a CSS rule below — kept in DOM so its
+           code paths (drawAll, click handlers, sidebar wiring) keep
+           updating in lock-step with the 3D view. Toggle the
+           `body.show-2d` class (or remove the rule) to bring it back. -->
+      <button class="view-tab" data-view="2d" style="display:none">2D Editor</button>
+      <button class="view-tab active" data-view="3d">3D Editor</button>
       <span class="view-help muted">3D: <b>click empty tile</b> = apply tool · <b>click entity</b> = grab + aim (move to rotate, click to commit, ESC to cancel) · drag = orbit · wheel = zoom</span>
     </div>
-    <div class="view-pane view-2d active">
+    <div class="view-pane view-2d" style="display:none">
       <canvas id="map-canvas" width="640" height="640"></canvas>
       <div class="canvas-legend">
         <span class="lg-spawn">●</span> Player spawn &nbsp;
@@ -152,7 +156,7 @@
         <span class="lg-crate">◆</span> Crate
       </div>
     </div>
-    <div class="view-pane view-3d">
+    <div class="view-pane view-3d active">
       <div id="three-mount"></div>
       <div class="three-overlay">
         <button id="btn-3d-recenter" class="btn">Re-center camera</button>

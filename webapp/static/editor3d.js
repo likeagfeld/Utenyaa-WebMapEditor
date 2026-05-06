@@ -273,7 +273,7 @@ function init() {
     }
     const dx = Math.abs(ev.clientX - _picker.downX);
     const dy = Math.abs(ev.clientY - _picker.downY);
-    if (dx + dy >= 5) return;             // drag → orbit, not edit
+    if (dx + dy >= 8) return;             // drag → orbit, not edit (8px slack for jittery clicks)
     if (ev.button !== _picker.downBtn) return;
     _setPointerFromEvent(ev);
     const t = _raycastTile();
@@ -332,6 +332,17 @@ function init() {
       ev.preventDefault();
       _exitAimMode(false);
     }
+  });
+
+  // Tool radio change → cancel any in-progress aim mode. Without
+  // this, the operator's stale aim from a prior tool eats the
+  // FIRST click of the new tool — observed as "Erase tool doesn't
+  // work" because the click that should erase was committing a
+  // previous aim instead.
+  document.querySelectorAll('input[name="tool"]').forEach((r) => {
+    r.addEventListener('change', () => {
+      if (_aimEntityIdx >= 0) _exitAimMode(false);
+    });
   });
 
   // Suppress browser context menu over the 3D view so right-click
