@@ -215,13 +215,26 @@ function init() {
     return -1;
   }
 
-  // ----- "Pick up + aim" rotation mode (intuitive entity rotation) -----
-  // Click an entity to grab it; mouse movement re-aims it to face the
-  // cursor (live preview); next click commits, ESC reverts. The
-  // visual scales up slightly to confirm "you have it". OrbitControls
-  // is disabled while aiming so a drag doesn't both orbit AND rotate.
-  let _aimEntityIdx  = -1;
-  let _aimOriginalDir = 0;
+  // ----- Persistent Rotate Mode + click-to-aim --------------------
+  // The 3D view has TWO modes:
+  //
+  //   1. Normal (default): clicks apply the current toolbox tool
+  //      (Paint tile, Place spawn/model/crate, Erase). Drag = orbit.
+  //
+  //   2. Rotate Mode (toggled via the "Rotate Mode" button): clicks
+  //      ROTATE the thing under the cursor instead of applying the
+  //      toolbox tool. Tile click → cycle 90° (4-state). Entity
+  //      click → enter "aim mode" where mouse motion re-aims the
+  //      entity until the next click commits it. ESC exits the
+  //      whole mode.
+  //
+  // The mode is persistent so the operator can rotate many things
+  // in a row without re-toggling. ESC cancels an in-progress aim
+  // first; a second ESC exits Rotate Mode entirely.
+  let _rotateModeActive = false;
+  let _aimEntityIdx     = -1;
+  let _aimOriginalDir   = 0;
+
   function _setHelpHint(msg) {
     const el = document.querySelector('.view-help');
     if (!el) return;
@@ -234,6 +247,24 @@ function init() {
       el.style.color = '';
     }
   }
+  function _setRotateMode(active) {
+    if (_rotateModeActive === active) return;
+    _rotateModeActive = active;
+    if (!active && _aimEntityIdx >= 0) _exitAimMode(false);
+    const btn = document.getElementById('btn-3d-rotate-mode');
+    if (btn) {
+      btn.textContent = 'Rotate Mode: ' + (active ? 'ON' : 'OFF');
+      btn.classList.toggle('primary', active);
+      btn.style.background = active ? '#f5a623' : '';
+      btn.style.color      = active ? '#000'     : '';
+    }
+    if (renderer && renderer.domElement) {
+      renderer.domElement.style.cursor = active ? 'crosshair' : '';
+    }
+    _setHelpHint(active
+      ? 'ROTATE MODE — click tile to cycle 90° · click entity to aim (move + click) · ESC to exit'
+      : null);
+  }
   function _enterAimMode(idx) {
     const level = window.utenyaaState && window.utenyaaState.getLevel();
     if (!level || !level.entities[idx]) return;
@@ -242,7 +273,7 @@ function init() {
     const visual = groupEntities.children[idx];
     if (visual) visual.scale.set(1.18, 1.18, 1.18);
     if (controls) controls.enabled = false;
-    _setHelpHint('Aiming entity — move mouse to rotate · click to commit · ESC to cancel');
+    _setHelpHint('Aiming — move mouse to rotate · click to commit · ESC to cancel');
   }
   function _exitAimMode(commit) {
     if (_aimEntityIdx < 0) return;
@@ -256,8 +287,18 @@ function init() {
     if (visual) visual.scale.set(1, 1, 1);
     _aimEntityIdx = -1;
     if (controls) controls.enabled = true;
-    _setHelpHint(null);
+    if (_rotateModeActive) {
+      _setHelpHint('ROTATE MODE — click tile to cycle 90° · click entity to aim (move + click) · ESC to exit');
+    } else {
+      _setHelpHint(null);
+    }
     if (typeof window.refreshSidebar === 'function') window.refreshSidebar();
+  }
+
+  // Hook up the Rotate Mode button.
+  const _rotateBtn = document.getElementById('btn-3d-rotate-mode');
+  if (_rotateBtn) {
+    _rotateBtn.addEventListener('click', () => _setRotateMode(!_rotateModeActive));
   }
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
@@ -266,34 +307,42 @@ function init() {
     _picker.downBtn = ev.button;
   });
   renderer.domElement.addEventListener('mouseup', (ev) => {
-    // ANY click while aiming commits the current direction.
+    // ANY click while aiming commits the current direction; we stay
+    // in Rotate Mode so the next click can rotate something else.
     if (_aimEntityIdx >= 0) {
       _exitAimMode(true);
       return;
     }
     const dx = Math.abs(ev.clientX - _picker.downX);
     const dy = Math.abs(ev.clientY - _picker.downY);
-    if (dx + dy >= 8) return;             // drag → orbit, not edit (8px slack for jittery clicks)
+    if (dx + dy >= 8) return;             // drag → orbit, not edit
     if (ev.button !== _picker.downBtn) return;
     _setPointerFromEvent(ev);
     const t = _raycastTile();
     if (!t) return;
     const level = window.utenyaaState && window.utenyaaState.getLevel();
-    if (ev.button === 0) {
-      // Left click on an existing entity → enter aim mode (rotate).
-      // Left click on empty tile → apply current toolbox tool.
+    if (_rotateModeActive) {
+      // Rotate-mode click — left OR right both rotate. Right-click
+      // still also works in normal mode for one-shot rotation, see
+      // below.
       const entIdx = _entityAtTile(level, t.x, t.y);
-      const tool = (document.querySelector('input[name="tool"]:checked') || {}).value;
-      if (entIdx >= 0 && tool !== 'erase-entity') {
+      if (entIdx >= 0) {
         _enterAimMode(entIdx);
-      } else if (typeof window.applyToolAtTile === 'function') {
+      } else if (typeof window.rotateAtTile === 'function') {
+        window.rotateAtTile(t.x, t.y, 90);
+      }
+      return;
+    }
+    if (ev.button === 0) {
+      // Normal mode left-click: apply current toolbox tool.
+      if (typeof window.applyToolAtTile === 'function') {
         window.applyToolAtTile(t.x, t.y);
         refreshFromLevel();
       }
     } else if (ev.button === 2) {
-      // Right click — quick 90° tile rotation OR enter aim mode for an
-      // entity (same gesture as left-click on entity, but works even
-      // when the toolbox is on an erase tool).
+      // Normal mode right-click: still works as a convenient one-shot
+      // rotate (90° tile, aim entity) — power-user shortcut without
+      // toggling the persistent mode.
       const entIdx = _entityAtTile(level, t.x, t.y);
       if (entIdx >= 0) {
         _enterAimMode(entIdx);
@@ -321,27 +370,29 @@ function init() {
     // for a satisfying click-feel without typing exact numbers.
     const stepRad = ev.shiftKey ? (5 * Math.PI / 180) : (22.5 * Math.PI / 180);
     const snapped = Math.round(ang / stepRad) * stepRad;
-    // direction is fxp 16.16 raw of radians (1.0 rad == 65536 raw)
     e.direction = Math.round(snapped * 65536) | 0;
     const visual = groupEntities.children[_aimEntityIdx];
     if (visual) visual.rotation.z = snapped;
   });
-  // ESC reverts an in-progress aim.
+  // ESC: cancel in-progress aim FIRST; a second ESC exits Rotate Mode.
   window.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && _aimEntityIdx >= 0) {
+    if (ev.key !== 'Escape') return;
+    if (_aimEntityIdx >= 0) {
       ev.preventDefault();
       _exitAimMode(false);
+    } else if (_rotateModeActive) {
+      ev.preventDefault();
+      _setRotateMode(false);
     }
   });
 
-  // Tool radio change → cancel any in-progress aim mode. Without
-  // this, the operator's stale aim from a prior tool eats the
-  // FIRST click of the new tool — observed as "Erase tool doesn't
-  // work" because the click that should erase was committing a
-  // previous aim instead.
+  // Tool radio change → cancel any in-progress aim mode AND turn
+  // off Rotate Mode so the user's next click reflects their just-
+  // selected tool.
   document.querySelectorAll('input[name="tool"]').forEach((r) => {
     r.addEventListener('change', () => {
       if (_aimEntityIdx >= 0) _exitAimMode(false);
+      if (_rotateModeActive)  _setRotateMode(false);
     });
   });
 

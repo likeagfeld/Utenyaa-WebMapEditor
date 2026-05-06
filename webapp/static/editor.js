@@ -434,7 +434,15 @@ window.rotateAtTile = function rotateAtTile(x, y, degDelta) {
     selectedEntityIdx = hit;
     drawAll();
     refreshSidebar();
-    if (typeof refreshFromLevel === 'function') refreshFromLevel();
+    // Trigger 3D scene refresh. `refreshFromLevel` lives in
+    // editor3d.js's separate <script> context — we can't lookup
+    // its name from here. Use the exposed window.utenyaa3D
+    // entry point instead. (Without this, tile/entity rotation
+    // updated the in-memory level but never repainted the 3D
+    // mesh, so users saw "rotation has no effect".)
+    if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
+      window.utenyaa3D.refreshFromLevel();
+    }
     return;
   }
   // No entity → cycle tile rotation by 90°. Sign of degDelta picks
@@ -453,7 +461,9 @@ window.rotateAtTile = function rotateAtTile(x, y, degDelta) {
     dummy:   t.dummy || 0,
   };
   drawAll();
-  if (typeof refreshFromLevel === 'function') refreshFromLevel();
+  if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
+    window.utenyaa3D.refreshFromLevel();
+  }
 };
 
 function rotateAtCursor(ev, degDelta) {
