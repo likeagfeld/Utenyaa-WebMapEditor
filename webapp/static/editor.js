@@ -462,11 +462,17 @@ function rotateAtCursor(ev, degDelta) {
 }
 
 // Also expose the apply-tool function so the 3D view can call it
-// after raycasting a tile coord.
-window.applyToolAtTile = function (x, y) { applyToolAt(x, y); drawAll(); };
-// Sidebar refresh exposed for editor3d.js to call after entity
-// changes (e.g., committing a rotation drag).
-window.refreshSidebar = function () { refreshSidebar(); };
+// after raycasting a tile coord. Capture the original function
+// references BEFORE reassigning to window — function declarations
+// at top level alias the same binding as window.<name>, so a
+// naive `window.foo = function () { foo(); }` would clobber the
+// lexical binding and recurse infinitely (observed as "maximum
+// call stack exceeded" on editor load).
+const _origApplyToolAt   = applyToolAt;
+const _origRefreshSidebar = refreshSidebar;
+const _origDrawAll       = drawAll;
+window.applyToolAtTile = function (x, y) { _origApplyToolAt(x, y); _origDrawAll(); };
+window.refreshSidebar  = _origRefreshSidebar;
 
 
 // ---- sidebar / info refresh --------------------------------------------
