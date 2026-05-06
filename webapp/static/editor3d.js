@@ -341,10 +341,17 @@ function init() {
    * map and find the matching combination by inspection. */
   const _uvBtn = document.getElementById('btn-uv-cycle');
   const _uvCombos = [
-    { label: 'A', base: 0, dir: 'right' },
-    { label: 'B', base: 0, dir: 'left'  },
-    { label: 'C', base: 1, dir: 'right' },
-    { label: 'D', base: 1, dir: 'left'  },
+    /* Confirmed by hardware test: combo with base 1 + right-shift
+     * matches the Saturn render. Operator screenshotted a 2x2 water-
+     * circle layout — editor (was on base 0) showed circles; Saturn
+     * showed X-pattern, every tile 180° off. Base 1 is exactly the
+     * 180° flip of base 0, so it's now the default ('A' label).
+     * Other combos kept as fallback exploration in case a different
+     * map exposes a residual mismatch. */
+    { label: 'A', base: 1, dir: 'right' },
+    { label: 'B', base: 1, dir: 'left'  },
+    { label: 'C', base: 0, dir: 'right' },
+    { label: 'D', base: 0, dir: 'left'  },
   ];
   let _uvIdx = 0;
   /* Set the window vars synchronously at init so the FIRST refresh
