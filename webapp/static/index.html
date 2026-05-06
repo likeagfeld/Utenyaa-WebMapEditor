@@ -4,7 +4,14 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Utenyaa Map Editor</title>
-<link rel="stylesheet" href="/static/editor.css">
+<link rel="stylesheet" href="static/editor.css">
+<!-- When embedded behind the saturncoup admin portal's basic-auth
+     gate, every visitor IS an authenticated operator — the editor's
+     own admin login flow is redundant and confusing. Hide its UI
+     surface; editor.js auto-grants admin to all sessions, see
+     refreshAdminStatus(). The standalone (non-embedded) deploy can
+     drop these rules to bring the login flow back. -->
+<style>#btn-admin,#admin-badge,#admin-dialog{display:none!important}</style>
 </head>
 <body>
 
@@ -189,7 +196,7 @@
   }
 }
 </script>
-<script type="module" src="/static/editor3d.js"></script>
-<script src="/static/editor.js"></script>
+<script type="module" src="static/editor3d.js"></script>
+<script src="static/editor.js"></script>
 </body>
 </html>

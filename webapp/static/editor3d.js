@@ -69,7 +69,7 @@ function gouraudToColor(argb) {
 
 function getTileTexture(idx) {
   if (textureCache.has(idx)) return textureCache.get(idx);
-  const tex = new THREE.TextureLoader().load(`/api/textures/${idx}.png`);
+  const tex = new THREE.TextureLoader().load(`api/textures/${idx}.png`);
   // Saturn uses point sampling (no bilinear, no mipmaps).
   tex.magFilter = THREE.NearestFilter;
   tex.minFilter = THREE.NearestFilter;
@@ -87,7 +87,7 @@ function getTileTexture(idx) {
 async function loadModelOnce(idx) {
   if (modelCache.has(idx)) return modelCache.get(idx);
   try {
-    const r = await fetch(`/api/models/${idx}`);
+    const r = await fetch(`api/models/${idx}`);
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const json = await r.json();
     const textures = json.textures.map(t => {

@@ -420,7 +420,7 @@ async function api(method, path, body) {
 }
 
 async function slugifyOnServer(name) {
-  const r = await api('GET', `/api/slugify?name=${encodeURIComponent(name)}`);
+  const r = await api('GET', `api/slugify?name=${encodeURIComponent(name)}`);
   return r.slug;
 }
 
@@ -450,7 +450,7 @@ $('#btn-save').addEventListener('click', async () => {
   const slug = await slugifyOnServer(name);
 
   try {
-    const r = await api('POST', `/api/maps/${encodeURIComponent(slug)}`, level);
+    const r = await api('POST', `api/maps/${encodeURIComponent(slug)}`, level);
     let msg = `Saved ${slug} (${r.ute_size_bytes} B .UTE)`;
     if (r.warnings && r.warnings.length) {
       msg += ` — ${r.warnings.length} warning(s)`;
@@ -469,7 +469,7 @@ $('#btn-save').addEventListener('click', async () => {
 
 $('#btn-validate').addEventListener('click', async () => {
   try {
-    const r = await api('POST', '/api/validate', level);
+    const r = await api('POST', 'api/validate', level);
     showValidation(r.errors, r.warnings);
     if (r.errors.length === 0) {
       toast(`Valid — would produce ${r.ute_size_bytes}-byte .UTE`);
@@ -487,8 +487,8 @@ $('#btn-download').addEventListener('click', async () => {
   const slug = await slugifyOnServer(name);
   // Force a save then download
   try {
-    await api('POST', `/api/maps/${encodeURIComponent(slug)}?force=1`, level);
-    window.location = `/api/maps/${encodeURIComponent(slug)}/ute`;
+    await api('POST', `api/maps/${encodeURIComponent(slug)}?force=1`, level);
+    window.location = `api/maps/${encodeURIComponent(slug)}/ute`;
   } catch (e) {
     toast(`Download failed: ${e.message}`, true);
   }
@@ -503,7 +503,7 @@ async function refreshLoadDialog() {
   const ul = $('#load-list');
   ul.innerHTML = '<li class="muted">Loading…</li>';
   try {
-    const r = await api('GET', '/api/maps');
+    const r = await api('GET', 'api/maps');
     ul.innerHTML = '';
     if (!r.maps.length) {
       ul.innerHTML = '<li class="muted">No saved maps yet</li>';
@@ -532,7 +532,7 @@ async function refreshLoadDialog() {
       b.addEventListener('click', async () => {
         const slug = b.getAttribute('data-load');
         try {
-          const data = await api('GET', `/api/maps/${encodeURIComponent(slug)}`);
+          const data = await api('GET', `api/maps/${encodeURIComponent(slug)}`);
           loadLevelData(data);
           $('#load-dialog').close();
           toast(`Loaded ${slug}`);
@@ -546,7 +546,7 @@ async function refreshLoadDialog() {
         ev.stopPropagation();
         const slug = b.getAttribute('data-clone');
         try {
-          const data = await api('GET', `/api/maps/${encodeURIComponent(slug)}`);
+          const data = await api('GET', `api/maps/${encodeURIComponent(slug)}`);
           // Generate a new name. Suggest "<original> (copy)" so the
           // resulting slug differs and Save creates a fresh entry.
           const base = (data.meta && data.meta.name) || slug;
@@ -575,7 +575,7 @@ async function refreshLoadDialog() {
         }
         if (!confirm(`Delete ${slug}? This cannot be undone.`)) return;
         try {
-          await api('DELETE', `/api/maps/${encodeURIComponent(slug)}`);
+          await api('DELETE', `api/maps/${encodeURIComponent(slug)}`);
           toast(`Deleted ${slug}`);
           await refreshLoadDialog();
         } catch (e) {
@@ -670,10 +670,15 @@ $$('input[name="tool"]').forEach(r => {
 let isAdmin = false;
 
 async function refreshAdminStatus() {
-  try {
-    const r = await api('GET', '/api/admin/status');
-    isAdmin = !!r.is_admin;
-  } catch { isAdmin = false; }
+  // When the editor is mounted behind the saturncoup admin portal,
+  // every visitor IS an authenticated operator (nginx basic-auth gate
+  // + portal proxy) — there's no need for the editor's own admin
+  // login dance. Auto-grant admin so destructive ops (delete) work
+  // without an extra modal. The login UI is also hidden via CSS in
+  // index.html so visitors don't see a redundant "Admin Mode" button.
+  // Standalone deploys that need real per-user gating should re-enable
+  // the original `api/admin/status` round-trip.
+  isAdmin = true;
   applyAdminUi();
 }
 
@@ -693,7 +698,7 @@ function applyAdminUi() {
 
 async function adminLogin(username, password) {
   try {
-    await api('POST', '/api/admin/login', { username, password });
+    await api('POST', 'api/admin/login', { username, password });
     isAdmin = true;
     applyAdminUi();
     toast('Admin mode enabled');
@@ -705,7 +710,7 @@ async function adminLogin(username, password) {
 
 async function adminLogout() {
   try {
-    await api('POST', '/api/admin/logout');
+    await api('POST', 'api/admin/logout');
   } catch { /* ignore */ }
   isAdmin = false;
   applyAdminUi();
@@ -749,7 +754,7 @@ let textureInfo = [];   // [{index, width, height}, ...] from /api/textures
 
 async function loadTexturePalette() {
   try {
-    const r = await api('GET', '/api/textures');
+    const r = await api('GET', 'api/textures');
     textureInfo = r.textures || [];
     renderTexturePalette();
     // Cap the texture index spinner to the actual count
@@ -772,7 +777,7 @@ function renderTexturePalette() {
     cell.title = `Texture ${t.index} (${t.width}x${t.height})`;
     cell.dataset.tex = t.index;
     const img = document.createElement('img');
-    img.src = `/api/textures/${t.index}.png`;
+    img.src = `api/textures/${t.index}.png`;
     img.alt = `tex ${t.index}`;
     cell.appendChild(img);
     const lbl = document.createElement('span');
