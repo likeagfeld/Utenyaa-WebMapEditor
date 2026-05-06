@@ -340,15 +340,24 @@ function init() {
    * operator can compare against their Saturn's render of the same
    * map and find the matching combination by inspection. */
   const _uvBtn = document.getElementById('btn-uv-cycle');
+  const _uvCombos = [
+    { label: 'A', base: 0, dir: 'right' },
+    { label: 'B', base: 0, dir: 'left'  },
+    { label: 'C', base: 1, dir: 'right' },
+    { label: 'D', base: 1, dir: 'left'  },
+  ];
+  let _uvIdx = 0;
+  /* Set the window vars synchronously at init so the FIRST refresh
+   * (later in init() / next show()) already uses combo A. Do NOT
+   * call refreshFromLevel() here — the scene mesh isn't built yet
+   * and triggering refresh mid-init was crashing the editor load. */
+  window.UV_BASE = _uvCombos[_uvIdx].base;
+  window.UV_ROT_DIR = _uvCombos[_uvIdx].dir;
   if (_uvBtn) {
-    const _uvCombos = [
-      { label: 'A', base: 0, dir: 'right' },
-      { label: 'B', base: 0, dir: 'left'  },
-      { label: 'C', base: 1, dir: 'right' },
-      { label: 'D', base: 1, dir: 'left'  },
-    ];
-    let _uvIdx = 0;
-    function _applyUvCombo() {
+    _uvBtn.textContent = 'UV: ' + _uvCombos[_uvIdx].label +
+      ' (base ' + _uvCombos[_uvIdx].base + ', ' + _uvCombos[_uvIdx].dir + ')';
+    _uvBtn.addEventListener('click', () => {
+      _uvIdx = (_uvIdx + 1) % _uvCombos.length;
       const c = _uvCombos[_uvIdx];
       window.UV_BASE = c.base;
       window.UV_ROT_DIR = c.dir;
@@ -357,12 +366,7 @@ function init() {
       if (window.utenyaa3D && window.utenyaa3D.refreshFromLevel) {
         window.utenyaa3D.refreshFromLevel();
       }
-    }
-    _uvBtn.addEventListener('click', () => {
-      _uvIdx = (_uvIdx + 1) % _uvCombos.length;
-      _applyUvCombo();
     });
-    _applyUvCombo();
   }
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
