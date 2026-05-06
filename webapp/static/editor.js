@@ -464,6 +464,9 @@ function rotateAtCursor(ev, degDelta) {
 // Also expose the apply-tool function so the 3D view can call it
 // after raycasting a tile coord.
 window.applyToolAtTile = function (x, y) { applyToolAt(x, y); drawAll(); };
+// Sidebar refresh exposed for editor3d.js to call after entity
+// changes (e.g., committing a rotation drag).
+window.refreshSidebar = function () { refreshSidebar(); };
 
 
 // ---- sidebar / info refresh --------------------------------------------

@@ -186,6 +186,7 @@ function init() {
   // Drag detection: on mouseup, compare to mousedown coords. If the
   // pointer moved < 5 pixels, treat as a click; otherwise it was an
   // orbit drag handled by OrbitControls.
+  // ----- 3D pointer state (shared by edit + rotate-aim modes) -----
   const _picker = {
     raycaster: new THREE.Raycaster(),
     pointer:   new THREE.Vector2(),
@@ -204,14 +205,72 @@ function init() {
     const tx = Math.floor(p.x / TILE_WORLD);
     const ty = Math.floor(p.y / TILE_WORLD);
     if (tx < 0 || tx >= MAP_DIM || ty < 0 || ty >= MAP_DIM) return null;
-    return { x: tx, y: ty };
+    return { x: tx, y: ty, world: p };
   }
+  function _entityAtTile(level, x, y) {
+    if (!level) return -1;
+    for (let i = level.entities.length - 1; i >= 0; i--) {
+      if (level.entities[i].x === x && level.entities[i].y === y) return i;
+    }
+    return -1;
+  }
+
+  // ----- "Pick up + aim" rotation mode (intuitive entity rotation) -----
+  // Click an entity to grab it; mouse movement re-aims it to face the
+  // cursor (live preview); next click commits, ESC reverts. The
+  // visual scales up slightly to confirm "you have it". OrbitControls
+  // is disabled while aiming so a drag doesn't both orbit AND rotate.
+  let _aimEntityIdx  = -1;
+  let _aimOriginalDir = 0;
+  function _setHelpHint(msg) {
+    const el = document.querySelector('.view-help');
+    if (!el) return;
+    if (msg) {
+      if (!el.dataset.original) el.dataset.original = el.innerHTML;
+      el.innerHTML = msg;
+      el.style.color = '#f5a623';
+    } else if (el.dataset.original) {
+      el.innerHTML = el.dataset.original;
+      el.style.color = '';
+    }
+  }
+  function _enterAimMode(idx) {
+    const level = window.utenyaaState && window.utenyaaState.getLevel();
+    if (!level || !level.entities[idx]) return;
+    _aimEntityIdx   = idx;
+    _aimOriginalDir = level.entities[idx].direction || 0;
+    const visual = groupEntities.children[idx];
+    if (visual) visual.scale.set(1.18, 1.18, 1.18);
+    if (controls) controls.enabled = false;
+    _setHelpHint('Aiming entity — move mouse to rotate · click to commit · ESC to cancel');
+  }
+  function _exitAimMode(commit) {
+    if (_aimEntityIdx < 0) return;
+    const level = window.utenyaaState && window.utenyaaState.getLevel();
+    if (!commit && level && level.entities[_aimEntityIdx]) {
+      level.entities[_aimEntityIdx].direction = _aimOriginalDir;
+      const visual = groupEntities.children[_aimEntityIdx];
+      if (visual) visual.rotation.z = (_aimOriginalDir || 0) / 65536;
+    }
+    const visual = groupEntities.children[_aimEntityIdx];
+    if (visual) visual.scale.set(1, 1, 1);
+    _aimEntityIdx = -1;
+    if (controls) controls.enabled = true;
+    _setHelpHint(null);
+    if (typeof window.refreshSidebar === 'function') window.refreshSidebar();
+  }
+
   renderer.domElement.addEventListener('mousedown', (ev) => {
     _picker.downX = ev.clientX;
     _picker.downY = ev.clientY;
     _picker.downBtn = ev.button;
   });
   renderer.domElement.addEventListener('mouseup', (ev) => {
+    // ANY click while aiming commits the current direction.
+    if (_aimEntityIdx >= 0) {
+      _exitAimMode(true);
+      return;
+    }
     const dx = Math.abs(ev.clientX - _picker.downX);
     const dy = Math.abs(ev.clientY - _picker.downY);
     if (dx + dy >= 5) return;             // drag → orbit, not edit
@@ -219,21 +278,64 @@ function init() {
     _setPointerFromEvent(ev);
     const t = _raycastTile();
     if (!t) return;
+    const level = window.utenyaaState && window.utenyaaState.getLevel();
     if (ev.button === 0) {
-      // Left click — apply current toolbox tool.
-      if (typeof window.applyToolAtTile === 'function') {
+      // Left click on an existing entity → enter aim mode (rotate).
+      // Left click on empty tile → apply current toolbox tool.
+      const entIdx = _entityAtTile(level, t.x, t.y);
+      const tool = (document.querySelector('input[name="tool"]:checked') || {}).value;
+      if (entIdx >= 0 && tool !== 'erase-entity') {
+        _enterAimMode(entIdx);
+      } else if (typeof window.applyToolAtTile === 'function') {
         window.applyToolAtTile(t.x, t.y);
         refreshFromLevel();
       }
     } else if (ev.button === 2) {
-      // Right click — rotate tile or entity at click point.
-      if (typeof window.rotateAtTile === 'function') {
-        window.rotateAtTile(t.x, t.y, ev.shiftKey ? 15 : 45);
+      // Right click — quick 90° tile rotation OR enter aim mode for an
+      // entity (same gesture as left-click on entity, but works even
+      // when the toolbox is on an erase tool).
+      const entIdx = _entityAtTile(level, t.x, t.y);
+      if (entIdx >= 0) {
+        _enterAimMode(entIdx);
+      } else if (typeof window.rotateAtTile === 'function') {
+        window.rotateAtTile(t.x, t.y, 90);
       }
     }
   });
+  // Move-while-aiming → live update entity direction to face cursor.
+  renderer.domElement.addEventListener('mousemove', (ev) => {
+    if (_aimEntityIdx < 0) return;
+    _setPointerFromEvent(ev);
+    _picker.raycaster.setFromCamera(_picker.pointer, camera);
+    const hits = _picker.raycaster.intersectObject(groupTerrain, true);
+    if (!hits.length) return;
+    const p = hits[0].point;
+    const level = window.utenyaaState && window.utenyaaState.getLevel();
+    if (!level) return;
+    const e = level.entities[_aimEntityIdx];
+    if (!e) return;
+    const ex = (e.x + 0.5) * TILE_WORLD;
+    const ey = (e.y + 0.5) * TILE_WORLD;
+    const ang = Math.atan2(p.y - ey, p.x - ex);
+    // Snap to 5° steps when Shift held — coarser snap to 22.5° otherwise
+    // for a satisfying click-feel without typing exact numbers.
+    const stepRad = ev.shiftKey ? (5 * Math.PI / 180) : (22.5 * Math.PI / 180);
+    const snapped = Math.round(ang / stepRad) * stepRad;
+    // direction is fxp 16.16 raw of radians (1.0 rad == 65536 raw)
+    e.direction = Math.round(snapped * 65536) | 0;
+    const visual = groupEntities.children[_aimEntityIdx];
+    if (visual) visual.rotation.z = snapped;
+  });
+  // ESC reverts an in-progress aim.
+  window.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape' && _aimEntityIdx >= 0) {
+      ev.preventDefault();
+      _exitAimMode(false);
+    }
+  });
+
   // Suppress browser context menu over the 3D view so right-click
-  // is available for our rotate action.
+  // is available for our aim/rotate action.
   renderer.domElement.addEventListener('contextmenu', (ev) => ev.preventDefault());
 
   initialized = true;
