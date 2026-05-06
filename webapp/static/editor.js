@@ -658,12 +658,19 @@ $('#btn-load').addEventListener('click', async () => {
   $('#load-dialog').showModal();
 });
 
-/* ---- Auto-depth: smooth value-noise depth field across all tiles ----
+/* ---- Auto-depth: smooth value-noise depth field + gouraud shading ----
  *
  * Each click reseeds with fresh random corner samples, bilinear-
  * interpolated to per-tile depths in [0..amplitude]. Texture, mirror,
  * and rotation are preserved — only the 4-bit depth field is rewritten.
  * Refreshes both 2D canvas and 3D mesh.
+ *
+ * Also auto-generates per-corner gouraud colors so the depth shows
+ * up VISUALLY as 3D shading on Saturn (and in the editor 3D preview).
+ * Without gouraud, varied depths produce flat-colored polygons that
+ * don't read as terrain. With gouraud, higher tiles render brighter
+ * and lower tiles darker — a directional-light effect that makes the
+ * height variation pop.
  *
  * The 5x5 corner grid (4x4 cells across the 20x20 map = 5 tiles per
  * cell) gives gentle rolling terrain — coarse enough to read as
@@ -673,15 +680,21 @@ $('#btn-auto-depth').addEventListener('click', () => {
   const ampRaw = parseInt($('#auto-depth-amp').value, 10);
   const amp = Math.max(1, Math.min(15, isNaN(ampRaw) ? 5 : ampRaw));
   if (!confirm(
-        'Apply auto-depth to all 400 tiles?\n\n' +
-        'This overwrites the depth value of every tile with a smooth ' +
-        'random pattern (amplitude ' + amp + '). Texture, mirror, and ' +
-        'rotation are preserved. Click again for a different pattern.')) {
+        'Apply auto-depth + auto-gouraud to all 400 tiles?\n\n' +
+        'This overwrites the depth value AND the per-corner gouraud ' +
+        'shading of every tile (amplitude ' + amp + '). Texture, ' +
+        'mirror, and rotation are preserved. The gouraud shading is ' +
+        'computed from the new depths to make the terrain read as ' +
+        '3D rather than flat-colored. Click again for a different pattern.')) {
     return;
   }
+  /* --- Step 1: bilinear-interp value noise → per-tile depth ----------- */
   const STEP = 5;
   const corners = new Float32Array(STEP * STEP);
   for (let i = 0; i < corners.length; i++) corners[i] = Math.random();
+  /* Cache new depths in a flat array first — gouraud step needs to
+   * read NEIGHBOR depths and we don't want to mix old and new. */
+  const newDepths = new Uint8Array(MAP_DIM * MAP_DIM);
   for (let y = 0; y < MAP_DIM; y++) {
     for (let x = 0; x < MAP_DIM; x++) {
       const fx = (x / (MAP_DIM - 1)) * (STEP - 1);
@@ -697,24 +710,92 @@ $('#btn-auto-depth').addEventListener('click', () => {
       const v0 = v00 * (1 - tx) + v10 * tx;
       const v1 = v01 * (1 - tx) + v11 * tx;
       const v = v0 * (1 - ty) + v1 * ty;
-      const depth = Math.round(v * amp);
+      newDepths[x + y * MAP_DIM] = Math.round(v * amp);
+    }
+  }
+  /* --- Step 2: write depths back, preserving rot/mirror -------------- */
+  for (let y = 0; y < MAP_DIM; y++) {
+    for (let x = 0; x < MAP_DIM; x++) {
       const idx = x + y * MAP_DIM;
       const t = level.tiles[idx];
       if (!t) continue;
       const rot = unpackTileRotation(t.raw);
       const mir = unpackTileMirror(t.raw);
       level.tiles[idx] = {
-        raw: packTileRaw(depth, mir, rot),
+        raw: packTileRaw(newDepths[idx], mir, rot),
         texture: t.texture,
         dummy:   t.dummy || 0,
       };
+    }
+  }
+  /* --- Step 3: per-vertex elevation = average of incident tile depths
+   *   then per-tile gouraud = directional-light dot product against
+   *   the tile's approximate normal at each corner. Light direction
+   *   is fixed: from upper-left and slightly above (`(0.6, -0.6, 0.7)`
+   *   in world space, normalized). Ambient floor 0.55 keeps even the
+   *   deepest valleys visible (no pitch-black tiles), max brightness
+   *   1.0 stays at jo_color 0xFFFF. ----------------------------------- */
+  const VDIM = MAP_DIM + 1;
+  const vh = new Float32Array(VDIM * VDIM);
+  for (let vy = 0; vy < VDIM; vy++) {
+    for (let vx = 0; vx < VDIM; vx++) {
+      let sum = 0, count = 0;
+      for (let dy = -1; dy <= 0; dy++) {
+        for (let dx = -1; dx <= 0; dx++) {
+          const tx = vx + dx, ty = vy + dy;
+          if (tx >= 0 && tx < MAP_DIM && ty >= 0 && ty < MAP_DIM) {
+            sum += newDepths[tx + ty * MAP_DIM];
+            count++;
+          }
+        }
+      }
+      vh[vx + vy * VDIM] = count ? sum / count : 0;
+    }
+  }
+  const LX = 0.6, LY = -0.6, LZ = 0.7;
+  const LLEN = Math.sqrt(LX * LX + LY * LY + LZ * LZ);
+  const AMBIENT = 0.55;
+  /* Brightness depends on amp — at amp=5 the slope per tile is small,
+   * so we scale the height-derivative term up to make shading visible. */
+  const SLOPE_GAIN = 6.0 / Math.max(1, amp);
+  function _gourLightAt(vx, vy) {
+    const h    = vh[vx + vy * VDIM];
+    const hL   = vx > 0        ? vh[(vx-1) + vy * VDIM] : h;
+    const hR   = vx < MAP_DIM  ? vh[(vx+1) + vy * VDIM] : h;
+    const hU   = vy > 0        ? vh[vx + (vy-1) * VDIM] : h;
+    const hD   = vy < MAP_DIM  ? vh[vx + (vy+1) * VDIM] : h;
+    const sx = (hR - hL) * 0.5 * SLOPE_GAIN;
+    const sy = (hD - hU) * 0.5 * SLOPE_GAIN;
+    const nlen = Math.sqrt(sx * sx + sy * sy + 1);
+    const nx = -sx / nlen, ny = -sy / nlen, nz = 1 / nlen;
+    const dot = (nx * LX + ny * LY + nz * LZ) / LLEN;
+    /* Add a small "elevation lift" term so taller tiles read as
+     * brighter even on a flat slope — gives the operator a clearer
+     * sense of which areas are "high ground". */
+    const elev = h / Math.max(1, amp);
+    let b = AMBIENT + (1 - AMBIENT) * (0.6 * Math.max(0, dot) + 0.4 * elev);
+    if (b > 1) b = 1;
+    if (b < AMBIENT) b = AMBIENT;
+    const ch = Math.max(0, Math.min(31, Math.round(b * 31)));
+    return 0x8000 | (ch << 10) | (ch << 5) | ch;  /* BGR-1555 grayscale */
+  }
+  for (let y = 0; y < MAP_DIM; y++) {
+    for (let x = 0; x < MAP_DIM; x++) {
+      const idx = x + y * MAP_DIM;
+      /* Editor corner order matches positions push: TL, TR, BR, BL */
+      level.gourad[idx] = [
+        _gourLightAt(x,     y    ),  /* TL */
+        _gourLightAt(x + 1, y    ),  /* TR */
+        _gourLightAt(x + 1, y + 1),  /* BR */
+        _gourLightAt(x,     y + 1),  /* BL */
+      ];
     }
   }
   drawAll();
   if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
     window.utenyaa3D.refreshFromLevel();
   }
-  toast('Auto-depth applied (amplitude ' + amp + ')');
+  toast('Auto-depth + gouraud applied (amplitude ' + amp + ')');
 });
 
 async function refreshLoadDialog() {
