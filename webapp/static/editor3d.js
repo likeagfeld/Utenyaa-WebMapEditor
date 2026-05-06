@@ -173,6 +173,69 @@ function init() {
 
   window.addEventListener('resize', onResize);
 
+  // ----- 3D click-to-edit -------------------------------------------
+  // Left-click (without drag) at a tile → applies the current tool
+  // from the toolbox (paint, place spawn/model/crate, erase). The
+  // 2D canvas's same applyToolAt is reused — single source of truth.
+  // Left-DRAG falls through to OrbitControls for camera orbit.
+  // Right-click (without drag) → rotates the tile/entity at the
+  // cursor by 45° (15° if Shift held), 4-state for tiles. Wheel
+  // remains zoom (default OrbitControls behavior); rotation via
+  // right-click avoids the wheel-vs-zoom collision.
+  //
+  // Drag detection: on mouseup, compare to mousedown coords. If the
+  // pointer moved < 5 pixels, treat as a click; otherwise it was an
+  // orbit drag handled by OrbitControls.
+  const _picker = {
+    raycaster: new THREE.Raycaster(),
+    pointer:   new THREE.Vector2(),
+    downX: -1, downY: -1, downBtn: -1,
+  };
+  function _setPointerFromEvent(ev) {
+    const rect = renderer.domElement.getBoundingClientRect();
+    _picker.pointer.x =  ((ev.clientX - rect.left) / rect.width)  * 2 - 1;
+    _picker.pointer.y = -((ev.clientY - rect.top)  / rect.height) * 2 + 1;
+  }
+  function _raycastTile() {
+    _picker.raycaster.setFromCamera(_picker.pointer, camera);
+    const hits = _picker.raycaster.intersectObject(groupTerrain, true);
+    if (!hits.length) return null;
+    const p = hits[0].point;
+    const tx = Math.floor(p.x / TILE_WORLD);
+    const ty = Math.floor(p.y / TILE_WORLD);
+    if (tx < 0 || tx >= MAP_DIM || ty < 0 || ty >= MAP_DIM) return null;
+    return { x: tx, y: ty };
+  }
+  renderer.domElement.addEventListener('mousedown', (ev) => {
+    _picker.downX = ev.clientX;
+    _picker.downY = ev.clientY;
+    _picker.downBtn = ev.button;
+  });
+  renderer.domElement.addEventListener('mouseup', (ev) => {
+    const dx = Math.abs(ev.clientX - _picker.downX);
+    const dy = Math.abs(ev.clientY - _picker.downY);
+    if (dx + dy >= 5) return;             // drag → orbit, not edit
+    if (ev.button !== _picker.downBtn) return;
+    _setPointerFromEvent(ev);
+    const t = _raycastTile();
+    if (!t) return;
+    if (ev.button === 0) {
+      // Left click — apply current toolbox tool.
+      if (typeof window.applyToolAtTile === 'function') {
+        window.applyToolAtTile(t.x, t.y);
+        refreshFromLevel();
+      }
+    } else if (ev.button === 2) {
+      // Right click — rotate tile or entity at click point.
+      if (typeof window.rotateAtTile === 'function') {
+        window.rotateAtTile(t.x, t.y, ev.shiftKey ? 15 : 45);
+      }
+    }
+  });
+  // Suppress browser context menu over the 3D view so right-click
+  // is available for our rotate action.
+  renderer.domElement.addEventListener('contextmenu', (ev) => ev.preventDefault());
+
   initialized = true;
 }
 
@@ -270,9 +333,25 @@ function rebuildTerrain(level) {
       positions.push(wx, wy, z00,  wxe, wy, z10,  wxe, wye, z11,  wx, wye, z01);
 
       // UV: rotation+mirror per DepthAndRotationAndMirror byte.
+      // Engine (Map.hpp) uses `baseIndex = 3 - rotation` to permute
+      // the polygon's slot[0..3] vertex assignment; SGL then maps
+      // texture corners (0,0),(1,0),(1,1),(0,1) to slots 0..3 in
+      // order. Working out the math at rot=0 gives:
+      //   slot 0 = SE   →  texture (0,0)
+      //   slot 1 = SW   →  texture (1,0)
+      //   slot 2 = NW   →  texture (1,1)
+      //   slot 3 = NE   →  texture (0,1)
+      // Editor positions are pushed in NW,NE,SE,SW order, so to
+      // match Saturn output at rot=0 the base UV in that vertex
+      // order is [(1,1),(0,1),(0,0),(1,0)]. The previous
+      // [(0,0),(1,0),(1,1),(0,1)] base produced 180°-rotated
+      // textures vs the engine — symptom: corner-textured roads
+      // looked clean in editor but had chevron/arrow artifacts
+      // in-game. Each rotation step right-shifts the UV array,
+      // which matches the engine's baseIndex decrement.
       const rot = (tile.raw >> 6) & 3;
       const mir = (tile.raw & 0x10) !== 0;
-      let uv = [[0,0], [1,0], [1,1], [0,1]];
+      let uv = [[1,1], [0,1], [0,0], [1,0]];
       for (let r = 0; r < rot; r++) uv = [uv[3], uv[0], uv[1], uv[2]];
       if (mir) uv = uv.map(([u, v]) => [1 - u, v]);
       for (const [u, v] of uv) uvs.push(u, v);

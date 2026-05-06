@@ -373,6 +373,17 @@ function refreshToolUi() {
 
 let isPainting = false;
 canvas.addEventListener('mousedown', (ev) => {
+  // Right-click rotates the tile under the cursor by 90°. The
+  // editor's 4-state tile rotation matches the engine's
+  // baseIndex permutation (0/90/180/270) so click-cycling
+  // walks the same set of looks the engine will render.
+  // Entity rotation: right-click on an entity rotates its
+  // direction by 45°. Hold Shift for fine-grained 15° steps.
+  if (ev.button === 2) {
+    ev.preventDefault();
+    rotateAtCursor(ev, ev.shiftKey ? 15 : 45);
+    return;
+  }
   isPainting = true;
   const { x, y } = tileFromEvent(ev);
   applyToolAt(x, y);
@@ -386,6 +397,73 @@ canvas.addEventListener('mousemove', (ev) => {
 });
 window.addEventListener('mouseup', () => { isPainting = false; });
 canvas.addEventListener('contextmenu', (ev) => ev.preventDefault());
+
+// Wheel rotates the cursor's entity (or tile) — fine adjustments
+// without dragging or typing. Up = +rotation, Down = -.
+canvas.addEventListener('wheel', (ev) => {
+  if (ev.ctrlKey) return;  // let browser zoom pass through
+  ev.preventDefault();
+  const step = ev.shiftKey ? 5 : 15;
+  rotateAtCursor(ev, ev.deltaY < 0 ? step : -step);
+}, { passive: false });
+
+/* ---- rotation-at-tile helper ------------------------------------------
+ *
+ * Both the 2D canvas's right-click/wheel handlers AND the 3D view's
+ * right-click handler call this with explicit tile coords. If an
+ * ENTITY is at the tile, rotate its direction (continuous, fxp 16.16
+ * radians on disk). If only a TILE is there, advance its rotation
+ * bits by one quarter turn (4-state, 0/90/180/270). Both update
+ * immediately and force a redraw + 3D refresh so the user sees the
+ * change. Exposed at window scope so editor3d.js can call it. */
+window.rotateAtTile = function rotateAtTile(x, y, degDelta) {
+  // Entity hit-test: any entity at this tile cell, LIFO.
+  let hit = -1;
+  for (let i = level.entities.length - 1; i >= 0; i--) {
+    if (level.entities[i].x === x && level.entities[i].y === y) {
+      hit = i; break;
+    }
+  }
+  if (hit >= 0) {
+    const e = level.entities[hit];
+    // direction is fxp 16.16 in radians. Convert to degrees, rotate,
+    // back to fxp.
+    const curDeg = (e.direction / 65536.0) * (180 / Math.PI);
+    const newDeg = ((curDeg + degDelta) % 360 + 360) % 360;
+    e.direction = degToFxpRad(newDeg);
+    selectedEntityIdx = hit;
+    drawAll();
+    refreshSidebar();
+    if (typeof refreshFromLevel === 'function') refreshFromLevel();
+    return;
+  }
+  // No entity → cycle tile rotation by 90°. Sign of degDelta picks
+  // direction; small steps still snap to a 90° increment.
+  const step = degDelta >= 0 ? 1 : 3;   // 3 = -1 mod 4
+  const idx = x + y * MAP_DIM;
+  const t = level.tiles[idx];
+  if (!t) return;
+  const curRot = (t.raw >> 6) & 3;
+  const newRot = (curRot + step) & 3;
+  const depth  = unpackTileDepth(t.raw);
+  const mirror = unpackTileMirror(t.raw);
+  level.tiles[idx] = {
+    raw: packTileRaw(depth, mirror, newRot),
+    texture: t.texture,
+    dummy:   t.dummy || 0,
+  };
+  drawAll();
+  if (typeof refreshFromLevel === 'function') refreshFromLevel();
+};
+
+function rotateAtCursor(ev, degDelta) {
+  const { x, y } = tileFromEvent(ev);
+  window.rotateAtTile(x, y, degDelta);
+}
+
+// Also expose the apply-tool function so the 3D view can call it
+// after raycasting a tile coord.
+window.applyToolAtTile = function (x, y) { applyToolAt(x, y); drawAll(); };
 
 
 // ---- sidebar / info refresh --------------------------------------------
