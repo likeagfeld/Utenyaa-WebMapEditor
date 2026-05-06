@@ -330,6 +330,41 @@ function init() {
       _setRotateMode(_rotateMode === 'object' ? 'none' : 'object'));
   }
 
+  /* UV combo cycler — diagnostic for the persistent rotation
+   * mismatch. Cycles through 4 combos:
+   *   A: base 0 (engine empirical), rot 'right'
+   *   B: base 0,                    rot 'left'
+   *   C: base 1 (Three.js standard), rot 'right'
+   *   D: base 1,                    rot 'left'
+   * Each click flips window.UV_* and refreshes the 3D view so the
+   * operator can compare against their Saturn's render of the same
+   * map and find the matching combination by inspection. */
+  const _uvBtn = document.getElementById('btn-uv-cycle');
+  if (_uvBtn) {
+    const _uvCombos = [
+      { label: 'A', base: 0, dir: 'right' },
+      { label: 'B', base: 0, dir: 'left'  },
+      { label: 'C', base: 1, dir: 'right' },
+      { label: 'D', base: 1, dir: 'left'  },
+    ];
+    let _uvIdx = 0;
+    function _applyUvCombo() {
+      const c = _uvCombos[_uvIdx];
+      window.UV_BASE = c.base;
+      window.UV_ROT_DIR = c.dir;
+      _uvBtn.textContent = 'UV: ' + c.label +
+        ' (base ' + c.base + ', ' + c.dir + ')';
+      if (window.utenyaa3D && window.utenyaa3D.refreshFromLevel) {
+        window.utenyaa3D.refreshFromLevel();
+      }
+    }
+    _uvBtn.addEventListener('click', () => {
+      _uvIdx = (_uvIdx + 1) % _uvCombos.length;
+      _applyUvCombo();
+    });
+    _applyUvCombo();
+  }
+
   renderer.domElement.addEventListener('mousedown', (ev) => {
     _picker.downX = ev.clientX;
     _picker.downY = ev.clientY;
@@ -535,22 +570,38 @@ function rebuildTerrain(level) {
       positions.push(wx, wy, z00,  wxe, wy, z10,  wxe, wye, z11,  wx, wye, z01);
 
       // UV: rotation+mirror per DepthAndRotationAndMirror byte.
-      // Empirically verified base — matches the Saturn engine on
-      // hardware. Earlier rederivation that "factored sprHVflip
-      // back to identity" was wrong (theoretical analysis missed
-      // something — likely the SGL polygon vertex slot order isn't
-      // the standard 0=TL,1=TR,2=BR,3=BL the docs imply, OR the
-      // textures land in VRAM in a way that the HV-flip doesn't
-      // actually cancel back to identity). Don't re-derive this
-      // from first principles again — verify on hardware.
-      // Editor positions are pushed in NW,NE,SE,SW order; this
-      // base is the on-hardware-verified pairing for that order
-      // at rot=0. Each rotation step right-shifts the UV array,
-      // matching the engine's baseIndex decrement.
+      // Both base AND rotation-step direction are operator-tunable
+      // because deriving them from SGL docs has produced wrong
+      // answers twice now (the actual hardware behavior depends
+      // on factors that aren't documented — slot order, VRAM
+      // texture layout, sprHVflip interaction). Two knobs on
+      // window so the operator can hot-swap without a redeploy:
+      //
+      //   window.UV_BASE = 0 (default) | 1
+      //     0 → [(1,1),(0,1),(0,0),(1,0)]  — empirical base from
+      //         commit 7cdce97
+      //     1 → [(0,0),(1,0),(1,1),(0,1)]  — Three.js standard
+      //
+      //   window.UV_ROT_DIR = 'right' (default) | 'left'
+      //     right → uv = [uv[3], uv[0], uv[1], uv[2]]  — matches
+      //             engine's baseIndex DECREMENT
+      //     left  → uv = [uv[1], uv[2], uv[3], uv[0]]  — opposite
+      //             direction in case engine actually increments
+      //
+      // To live-test on the deployed editor: open browser console
+      // and set the var, then call window.utenyaa3D.refreshFromLevel().
+      // Once the right combination is found, hard-code it back in.
       const rot = (tile.raw >> 6) & 3;
       const mir = (tile.raw & 0x10) !== 0;
-      let uv = [[1,1], [0,1], [0,0], [1,0]];
-      for (let r = 0; r < rot; r++) uv = [uv[3], uv[0], uv[1], uv[2]];
+      const _base = (window.UV_BASE === 1)
+        ? [[0,0], [1,0], [1,1], [0,1]]
+        : [[1,1], [0,1], [0,0], [1,0]];
+      let uv = _base.map(p => p.slice());
+      for (let r = 0; r < rot; r++) {
+        uv = (window.UV_ROT_DIR === 'left')
+          ? [uv[1], uv[2], uv[3], uv[0]]
+          : [uv[3], uv[0], uv[1], uv[2]];
+      }
       if (mir) uv = uv.map(([u, v]) => [1 - u, v]);
       for (const [u, v] of uv) uvs.push(u, v);
 
