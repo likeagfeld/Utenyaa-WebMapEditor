@@ -987,8 +987,10 @@ window.utenyaaState = {
   onLevelChange: null,
 };
 
-// Hook drawAll so any 2D edit also refreshes the 3D scene
-const _origDrawAll = drawAll;
+// Hook: any 2D edit also refreshes the 3D scene. (The dead
+// `const _origDrawAll` that lived here previously collided with
+// the earlier window.applyToolAtTile capture and produced a
+// SyntaxError on script load — removed.)
 window._afterEdit = () => {
   if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
     window.utenyaa3D.refreshFromLevel();
