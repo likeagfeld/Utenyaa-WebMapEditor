@@ -768,17 +768,19 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
 
         native_w = cols * cell_w
         native_h = rows * cell_h
-        if w == native_w and h == native_h:
+        # Tolerant: width must match exactly; height >= expected so
+        # accidental editor padding (extra rows) is ignored.
+        if w == native_w and h >= native_h:
             block = 1
-        elif w == native_w * TEMPLATE_SCALE and h == native_h * TEMPLATE_SCALE:
+        elif w == native_w * TEMPLATE_SCALE and h >= native_h * TEMPLATE_SCALE:
             block = TEMPLATE_SCALE
         else:
             return jsonify({
                 "error":
-                    f"sheet must be {native_w}x{native_h} (1×) or "
-                    f"{native_w*TEMPLATE_SCALE}x{native_h*TEMPLATE_SCALE} "
-                    f"({TEMPLATE_SCALE}× — the template download size); "
-                    f"got {w}x{h}. Use /api/chars/template.png as a starting point."
+                    f"sheet width must be {native_w} (1×) or "
+                    f"{native_w*TEMPLATE_SCALE} ({TEMPLATE_SCALE}×); "
+                    f"got {w}x{h}. Use /api/chars/template.png as a "
+                    f"starting point."
             }), 400
 
         saved = []
@@ -1218,16 +1220,27 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
             return jsonify({"error": f"PNG decode: {e}"}), 400
 
         nat_w, nat_h = cols * cell_w, rows * cell_h
-        if w == nat_w and h == nat_h:
+        # Tolerant size detection — many image editors add accidental
+        # padding (transparent border, layer-merge artifacts). We accept
+        # any width that's exactly the 1× or 16× expected, and any
+        # height that's AT LEAST as tall as the strip needs to be at
+        # that scale. Top-aligned crop, so the user just paints inside
+        # the top cell-height of the canvas.
+        if w == nat_w and h >= nat_h:
             block = 1
-        elif w == nat_w * TEMPLATE_SCALE and h == nat_h * TEMPLATE_SCALE:
+        elif w == nat_w * TEMPLATE_SCALE and h >= nat_h * TEMPLATE_SCALE:
             block = TEMPLATE_SCALE
         else:
             return jsonify({
                 "error":
-                    f"strip must be {nat_w}x{nat_h} (1×) or "
-                    f"{nat_w*TEMPLATE_SCALE}x{nat_h*TEMPLATE_SCALE} "
-                    f"({TEMPLATE_SCALE}×); got {w}x{h}"
+                    f"strip width must be {nat_w} (1×) or "
+                    f"{nat_w*TEMPLATE_SCALE} ({TEMPLATE_SCALE}×) and height "
+                    f"at least {nat_h}/{nat_h*TEMPLATE_SCALE} respectively; "
+                    f"got {w}x{h}. Common cause: image editor added "
+                    f"extra rows/columns of canvas. Crop/resize to one "
+                    f"of those exact dimensions, or just leave it — we "
+                    f"only sample the top {nat_h} (or {nat_h*TEMPLATE_SCALE}) "
+                    f"rows, but the WIDTH must match exactly."
             }), 400
 
         frames = []
