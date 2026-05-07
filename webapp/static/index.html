@@ -190,15 +190,19 @@
     </details>
     <div class="view-pane view-sprites" style="display:none">
       <div class="sprites-toolbar">
-        <span class="muted">CHARS.PAK — 5 characters × 5 frames each. Click a frame to edit.</span>
+        <span class="muted">CHARS.PAK — 5 characters × 5 frames. Click a frame to edit.
+          <b style="color:#7fc26b">Originals are always preserved on disk;</b>
+          edits go to <code>custom_chars/</code> overrides.</span>
         <span class="sprites-toolbar-spacer"></span>
         <a id="btn-sprites-download" class="btn"
            href="api/chars/template.png" download="utenyaa-chars-template.png"
-           title="Download a single PNG sheet of all 25 sprites (80×80, 5 cols × 5 rows of 16×16 frames). Edit in any image editor that handles RGBA PNG (Photoshop, GIMP, Aseprite, Paint.NET) and re-upload via Import.">Download template</a>
+           title="Download a 1280×1280 PNG sheet of all 25 sprites (5 cols × 5 rows). Each Saturn pixel is rendered as a 16×16 block so the download isn't blurry in default image viewers. Edit in any image editor that handles RGBA PNG (Aseprite, GIMP, Photoshop, Paint.NET) and re-upload via Import.">Download template</a>
         <label id="btn-sprites-import-wrap" class="btn"
-               title="Upload an edited template PNG. Must be 80×80 RGBA. Each cell becomes a custom sprite override; pixels with alpha &lt; 128 become transparent on Saturn.">Import template
+               title="Upload an edited template PNG. Accepts the 1280×1280 download size or native 80×80. Each cell becomes a custom override; the original CHARS.PAK is NOT modified.">Import template
           <input type="file" id="sprites-import-file" accept="image/png" style="display:none">
         </label>
+        <button id="btn-sprites-reset-all" class="btn"
+                title="Delete ALL custom sprite overrides and restore every frame to its original CHARS.PAK pixels. The source PAK is never touched; this just deletes the editor's saved customizations.">Reset all to original</button>
         <button id="btn-sprites-help" class="btn"
                 title="Show the design guide.">?</button>
         <button id="btn-sprites-refresh" class="btn">Refresh</button>
@@ -226,11 +230,26 @@
               <li><b>frame 4 — dead:</b> charred / explosion KO sprite</li>
             </ul>
 
-            <p style="margin-top:10px"><b>Template.</b> 80×80 RGBA PNG.
-            5 columns × 5 rows of 16×16 cells. Row = character index,
-            column = frame index. Magenta pixels in the download
-            template are placeholder transparency markers — replace
-            with real colors or leave alpha = 0 on import.</p>
+            <p style="margin-top:10px"><b>Template.</b> The download is
+            1280×1280 RGBA PNG — each Saturn pixel is rendered as a
+            16×16 block so it looks crisp in default image viewers
+            and gives plenty of room to edit. 5 columns × 5 rows of
+            cells. Row = character index, column = frame index.
+            Magenta pixels are placeholder transparency markers —
+            replace with real colors or leave alpha = 0 on import.
+            On import the server samples the top-left of each 16×16
+            block, so use a 1-pixel pencil tool with no anti-aliasing
+            for predictable results.</p>
+
+            <p style="margin-top:10px"><b>Originals are always
+            preserved.</b> The source <code>CHARS.PAK</code> file on
+            disk is never modified by this editor. Imports + manual
+            pixel edits are stored as separate per-frame override
+            files under <code>webapp/custom_chars/</code>.
+            <b>Reset to original</b> on a single frame deletes that
+            frame's override; <b>Reset all to original</b> wipes
+            every override at once. Either way, the original Saturn
+            sprites come right back.</p>
 
             <p style="margin-top:10px"><b>Saturn quantization.</b> The
             VDP1 only knows ARGB-1555 (5 bits R, G, B; 1 bit alpha).

@@ -649,31 +649,37 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
             chars_cache._png_cache.pop(idx, None)
         return jsonify({"index": idx, "had_custom": existed, "reset": True})
 
+    # Each Saturn pixel becomes a 16×16 block in the downloaded
+    # template. With 16×16 source sprites, a single cell is 256×256
+    # in the template; the full 5×5 sheet is 1280×1280. That gives
+    # editors plenty of room and makes pixel boundaries obvious so
+    # the download doesn't appear "blurry" in default image viewers.
+    # The import path detects this scale and samples each block's
+    # top-left to recover the Saturn pixel.
+    TEMPLATE_SCALE = 16
+
     @app.route("/api/chars/template.png", methods=["GET"])
     def chars_template():
         """Build a 5×5 sheet PNG of all 25 sprite frames for the
-        operator to download, edit in any image editor, and re-upload.
+        operator to download, edit, and re-upload.
 
-        Layout (16×16 each, 80×80 total native):
+        Layout (each Saturn pixel rendered as a 16×16 block):
             row    = character index (0..4)
             column = frame within character (0..4 = south/diagonal/north/side/dead)
             pak_idx = row*5 + column
 
-        Pixels: native 16×16 ARGB-1555 source. Transparent pixels get
-        a magenta tint (255, 0, 255, 0) so they're obvious in editors;
-        the import path treats anything with alpha<128 as transparent
-        regardless of color, so the magenta is just a visual marker.
-        """
+        Transparent source pixels render as bright magenta so they're
+        obvious in editors. The import path treats alpha<128 as
+        transparent regardless of color — magenta is just a marker."""
         chars_cache._ensure_loaded()
         if not chars_cache._textures:
             abort(404)
-        # All frames have the same W/H per the source PAK convention.
+        sx = TEMPLATE_SCALE
         cell_w = chars_cache._textures[0].width
         cell_h = chars_cache._textures[0].height
-        cols = 5
-        rows = 5
-        sheet_w = cols * cell_w
-        sheet_h = rows * cell_h
+        cols, rows = 5, 5
+        sheet_w = cols * cell_w * sx
+        sheet_h = rows * cell_h * sx
         sheet = bytearray(sheet_w * sheet_h * 4)
         for ci in range(min(rows * cols, len(chars_cache._textures))):
             r = ci // cols
@@ -686,20 +692,20 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
                 for px in range(cell_w):
                     p = pixels[py * cell_w + px]
                     R, G, B, A = pak_format._argb1555_to_rgba(p)
-                    sx = c * cell_w + px
-                    sy = r * cell_h + py
-                    di = (sy * sheet_w + sx) * 4
                     if A == 0:
-                        # Magenta marker for transparency — easy to spot.
-                        sheet[di]   = 255
-                        sheet[di+1] = 0
-                        sheet[di+2] = 255
-                        sheet[di+3] = 0
+                        rr, gg, bb, aa = 255, 0, 255, 0
                     else:
-                        sheet[di]   = R
-                        sheet[di+1] = G
-                        sheet[di+2] = B
-                        sheet[di+3] = 255
+                        rr, gg, bb, aa = R, G, B, 255
+                    base_x = (c * cell_w + px) * sx
+                    base_y = (r * cell_h + py) * sx
+                    for dy in range(sx):
+                        di = ((base_y + dy) * sheet_w + base_x) * 4
+                        for dx in range(sx):
+                            sheet[di]   = rr
+                            sheet[di+1] = gg
+                            sheet[di+2] = bb
+                            sheet[di+3] = aa
+                            di += 4
         png = pak_format.encode_png(bytes(sheet), sheet_w, sheet_h)
         from flask import Response
         return Response(png, mimetype="image/png",
@@ -711,10 +717,19 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
 
     @app.route("/api/chars/import", methods=["POST"])
     def chars_import():
-        """Accept a PNG sheet (5 cols × 5 rows of 16×16 frames) and
-        save each cell as a custom override. Body: raw PNG bytes
-        (Content-Type: image/png) OR multipart form with 'file' field.
-        Returns per-frame status."""
+        """Accept a PNG sheet (5 cols × 5 rows) and save each cell as
+        a custom override. Body: raw PNG bytes (Content-Type:
+        image/png) OR multipart form with 'file' field.
+
+        Auto-detects scale: native 1× (80×80, one PNG pixel per Saturn
+        pixel) or 16× upscaled (1280×1280, one Saturn pixel per 16×16
+        block — matches the /api/chars/template.png download). Other
+        scales are rejected with a clear error.
+
+        IMPORTANT: this writes to webapp/custom_chars/<idx>.dat — the
+        SOURCE CHARS.PAK on disk is NEVER modified. The /api/chars/<idx>/
+        reset endpoint deletes the override; /api/chars/reset_all clears
+        every override at once. Originals are always recoverable."""
         if not _is_admin():
             abort(403)
         chars_cache._ensure_loaded()
@@ -723,8 +738,6 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         cell_w = chars_cache._textures[0].width
         cell_h = chars_cache._textures[0].height
         cols, rows = 5, 5
-        expected_w = cols * cell_w
-        expected_h = rows * cell_h
 
         # Accept either raw image/png body or a multipart form upload.
         data = b""
@@ -741,11 +754,20 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
             w, h, rgba = pak_format.decode_png_rgba(data)
         except ValueError as e:
             return jsonify({"error": f"PNG decode failed: {e}"}), 400
-        if w != expected_w or h != expected_h:
+
+        native_w = cols * cell_w
+        native_h = rows * cell_h
+        if w == native_w and h == native_h:
+            block = 1
+        elif w == native_w * TEMPLATE_SCALE and h == native_h * TEMPLATE_SCALE:
+            block = TEMPLATE_SCALE
+        else:
             return jsonify({
                 "error":
-                    f"sheet must be {expected_w}x{expected_h} (got {w}x{h}); "
-                    "use the /api/chars/template.png download as a starting point."
+                    f"sheet must be {native_w}x{native_h} (1×) or "
+                    f"{native_w*TEMPLATE_SCALE}x{native_h*TEMPLATE_SCALE} "
+                    f"({TEMPLATE_SCALE}× — the template download size); "
+                    f"got {w}x{h}. Use /api/chars/template.png as a starting point."
             }), 400
 
         saved = []
@@ -753,15 +775,45 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
             r = ci // cols
             c = ci % cols
             cell_rgba = bytearray(cell_w * cell_h * 4)
+            # Sample the top-left pixel of each `block`x`block` block to
+            # recover the Saturn-native pixel. The user's sprite editor
+            # was instructed to use a 1-pixel pencil tool with no AA;
+            # if they used smoothing/gradient tools the top-left sample
+            # is the most predictable result (matches what they'd see
+            # if they snapped their drawing to the nearest pixel grid).
             for py in range(cell_h):
-                src = ((r * cell_h + py) * w + c * cell_w) * 4
-                cell_rgba[py * cell_w * 4 : (py + 1) * cell_w * 4] = \
-                    rgba[src : src + cell_w * 4]
+                for px in range(cell_w):
+                    sx = (c * cell_w + px) * block
+                    sy = (r * cell_h + py) * block
+                    src = (sy * w + sx) * 4
+                    di = (py * cell_w + px) * 4
+                    cell_rgba[di]   = rgba[src]
+                    cell_rgba[di+1] = rgba[src+1]
+                    cell_rgba[di+2] = rgba[src+2]
+                    cell_rgba[di+3] = rgba[src+3]
             pixels = pak_format.rgba8_to_argb1555(bytes(cell_rgba), cell_w, cell_h)
             _save_char_pixels(ci, cell_w, cell_h, pixels)
             saved.append(ci)
         return jsonify({"saved": saved, "count": len(saved),
-                        "sheet": f"{w}x{h}", "cell": f"{cell_w}x{cell_h}"})
+                        "sheet": f"{w}x{h}", "cell": f"{cell_w}x{cell_h}",
+                        "scale": block,
+                        "originals_preserved": True})
+
+    @app.route("/api/chars/reset_all", methods=["POST"])
+    def reset_all_chars():
+        """Wipe ALL custom sprite overrides at once. Restores the
+        original CHARS.PAK pixels for every frame. The source PAK on
+        disk is never touched; this just deletes the override files."""
+        if not _is_admin():
+            abort(403)
+        custom_dir = Path(app.config["CUSTOM_CHARS_DIR"])
+        deleted = 0
+        for p in custom_dir.glob("*.dat"):
+            if p.stem.isdigit():
+                p.unlink(missing_ok=True)
+                deleted += 1
+        chars_cache._png_cache.clear()
+        return jsonify({"deleted": deleted, "reset": True})
 
     @app.route("/api/models", methods=["GET"])
     def list_models():

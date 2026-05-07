@@ -479,6 +479,17 @@
     if (importInput) importInput.addEventListener('change', async (ev) => {
       const file = ev.target.files && ev.target.files[0];
       if (!file) return;
+      const ok = confirm(
+        `Import "${file.name}" as the new sprite sheet?\n\n`
+        + 'Each of the 25 cells will become a custom override. '
+        + 'The ORIGINAL CHARS.PAK on disk is NOT modified — '
+        + 'you can recover the originals at any time with '
+        + '"Reset all to original" or per-frame "Reset to original".\n\n'
+        + 'Continue?');
+      if (!ok) {
+        ev.target.value = '';
+        return;
+      }
       try {
         const r = await fetch('api/chars/import', {
           method:  'POST',
@@ -490,13 +501,35 @@
           alert('Import failed: ' + (result.error || ('HTTP ' + r.status)));
           return;
         }
-        alert('Imported ' + (result.count || 0) + ' frames from sheet '
-          + (result.sheet || '?') + ' (cell ' + (result.cell || '?') + ').');
+        alert('Imported ' + (result.count || 0) + ' frames from a '
+          + (result.sheet || '?') + ' sheet (' + (result.scale || 1) + '× scale, '
+          + 'cell ' + (result.cell || '?') + ').\n\n'
+          + 'Original CHARS.PAK on disk is unchanged.');
         loadSprites();
       } catch (e) {
         alert('Import failed: ' + (e.message || e));
       } finally {
-        ev.target.value = '';   // allow re-upload of same file
+        ev.target.value = '';
+      }
+    });
+
+    const resetAllBtn = $('#btn-sprites-reset-all');
+    if (resetAllBtn) resetAllBtn.addEventListener('click', async () => {
+      if (!confirm(
+        'Delete ALL custom sprite overrides and restore every frame '
+        + 'to its original CHARS.PAK pixels?\n\n'
+        + 'This affects the editor only — the source CHARS.PAK on '
+        + 'disk is not touched. The deletion is irreversible: any '
+        + 'unsaved custom edits will be lost.')) return;
+      try {
+        const r = await fetch('api/chars/reset_all', { method: 'POST' });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const result = await r.json();
+        alert('Restored ' + (result.deleted || 0) + ' frame(s) to original.');
+        closeEditor();
+        loadSprites();
+      } catch (e) {
+        alert('Reset all failed: ' + (e.message || e));
       }
     });
   }
