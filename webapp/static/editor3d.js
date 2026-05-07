@@ -330,34 +330,6 @@ function init() {
       _setRotateMode(_rotateMode === 'object' ? 'none' : 'object'));
   }
 
-  /* Rotation LUT knob — runtime-editable mapping from .UTE stored
-   * rotation byte to PawCraft left-shift count used by the editor
-   * preview. Identity default; operator tunes to match Saturn.
-   * Tries to load from localStorage so the chosen LUT survives
-   * page reloads; persists on Apply. */
-  try {
-    const saved = JSON.parse(localStorage.getItem('utenyaa_rot_lut') || 'null');
-    if (Array.isArray(saved) && saved.length === 4) {
-      window.UTENYAA_ROT_LUT = saved.map(v => (v | 0) & 3);
-      for (let i = 0; i < 4; i++) {
-        const inp = document.getElementById('rot-lut-' + i);
-        if (inp) inp.value = window.UTENYAA_ROT_LUT[i];
-      }
-    }
-  } catch (e) { /* ignore parse errors */ }
-  const _rotLutApplyBtn = document.getElementById('btn-rot-lut-apply');
-  if (_rotLutApplyBtn) {
-    _rotLutApplyBtn.addEventListener('click', () => {
-      const next = [];
-      for (let i = 0; i < 4; i++) {
-        const inp = document.getElementById('rot-lut-' + i);
-        next.push((parseInt(inp.value, 10) | 0) & 3);
-      }
-      window.UTENYAA_ROT_LUT = next;
-      try { localStorage.setItem('utenyaa_rot_lut', JSON.stringify(next)); } catch (e) {}
-      refreshFromLevel();
-    });
-  }
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
     _picker.downX = ev.clientX;
@@ -613,39 +585,13 @@ function rebuildTerrain(level) {
        * matches a 90° offset in rotation-space. Empirically rather
        * than analytically: `+1 mod 4` to rot puts editor in lockstep
        * with Saturn for every rotation 0..3. */
-      /* RUNTIME-EDITABLE LUT (replaces deduced formula).
-       *
-       * Multiple iterations of derived-formula attempts have failed
-       * to fully match Saturn output across both shiro and dansfield
-       * because at least one assumption in the SGL Dual_Plane UV /
-       * sprHVflip / world-axis chain disagrees with hardware in a
-       * way I can't pin down from logs alone. Switching to an
-       * operator-tunable lookup table indexed by stored rotation:
-       *
-       *   ROT_LUT[stored] = K (PawCraft left-shift count, 0..3)
-       *
-       * The table is exposed as window.UTENYAA_ROT_LUT so it can be
-       * edited live from the browser console (or via the small UI
-       * knob below the canvas). After tweaking, the operator hits
-       * one key (R) to redraw. Workflow on the dansfield 2x2
-       * water-circle cluster (texture 1 at (13-14, 9-10) with
-       * stored values 1, 2, 0, 3 in TL/TR/BL/BR slots):
-       *   1. Set ROT_LUT[N] entries one at a time.
-       *   2. Compare each cluster tile's editor preview to its
-       *      on-Saturn render.
-       *   3. Adjust until all 4 cluster tiles match.
-       *   4. Tell me the final 4 LUT values; I bake them into the
-       *      const default and ship.
-       *
-       * Default initial values: K=stored (identity). All 4 +N and
-       * 4 -N permutations have been tried as constant formulas;
-       * the LUT is the strict superset that allows non-uniform
-       * mappings the constant formulas can't express. */
-      if (!window.UTENYAA_ROT_LUT) {
-        window.UTENYAA_ROT_LUT = [0, 1, 2, 3];   /* identity default */
-      }
-      const stored = (tile.raw >> 6) & 3;
-      const rot = (window.UTENYAA_ROT_LUT[stored] | 0) & 3;
+      /* Stored rotation byte → PawCraft left-shift count.
+       * +3 (= -1 mod 4) is the round-2 hardware-validated value
+       * that operator confirmed worked for shiro on real Saturn.
+       * Dansfield's directional textures expose a residual mismatch
+       * that no single constant offset fully fixes; staying with
+       * the value that's known to be right for at least one map. */
+      const rot = (((tile.raw >> 6) & 3) + 3) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();
