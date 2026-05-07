@@ -575,10 +575,21 @@ function rebuildTerrain(level) {
       for (let r = 0; r < rot; r++) {
         paw = paw.slice(1).concat(paw.slice(0, 1));  // left-shift, per PawCraft
       }
+      /* HARDWARE-VERIFIED 0.8: operator confirmed Saturn renders the
+       * shiro2 4-water-tile circle correctly with the rotation values
+       * stored in shiro2.UTE, but the editor (PawCraft-canonical port)
+       * showed those same values as a 180°-rotated X. Cause: three.js's
+       * default `flipY: true` on textures applies an extra V-axis flip
+       * vs PawCraft's OpenGL `flipY: false` convention, so my literal
+       * port produced the V-flipped output of PawCraft. Easiest fix:
+       * post-process each UV by (1-u, 1-v), which is a 180° rotation
+       * of the texture-mapping that exactly cancels the unintended
+       * extra flip and brings the editor in line with Saturn's render.
+       * Verified by operator screenshot 2026-05-07 (shiro2 X→circle). */
       const PAW_IDX_FOR_MY = [0, 3, 2, 1];
       for (let i = 0; i < 4; i++) {
         const [u, v] = paw[PAW_IDX_FOR_MY[i]];
-        uvs.push(u, v);
+        uvs.push(1 - u, 1 - v);
       }
 
       // Per-corner gouraud color from .UTE
