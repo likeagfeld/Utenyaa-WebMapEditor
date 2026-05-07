@@ -360,9 +360,11 @@ function init() {
       /* Rotate Tile mode — click ALWAYS rotates the tile under the
        * cursor 90°, even if an entity sits on top of it. The two-
        * button design replaces the older Shift+click bypass — the
-       * mode is the bypass. */
+       * mode is the bypass. Pass forceTile=true so rotateAtTile
+       * skips its entity hit-test (which otherwise rotates the
+       * entity instead of the tile underneath). */
       if (typeof window.rotateAtTile === 'function') {
-        window.rotateAtTile(t.x, t.y, 90);
+        window.rotateAtTile(t.x, t.y, 90, /*forceTile=*/true);
       }
       return;
     }
@@ -588,13 +590,55 @@ function rebuildTerrain(level) {
        * matches a 90° offset in rotation-space. Empirically rather
        * than analytically: `+1 mod 4` to rot puts editor in lockstep
        * with Saturn for every rotation 0..3. */
-      /* Empirical correction iteration 3:
-       *   - With raw_rot:        editor was 180° off (user's first screenshot)
-       *   - With raw_rot+1:      editor was 180° off (rotated wrong direction)
-       *   - With raw_rot+3 (=-1): TRYING NOW. User reported +2 clicks
-       *     needed at the +1 state, so the editor needs 2 more steps.
-       *     +1+2=+3, equivalent to -1 mod 4. */
-      const rot = (((tile.raw >> 6) & 3) + 3) & 3;
+      /* DATA-DRIVEN derivation (round 14) using TILE_ROT_DBG dump
+       * captured at 19:20:19 on Dansfield + screen-space axis sense.
+       *
+       * Saturn V[0..3] vertex assignment per stored rotation
+       * (world-coord labels from the diagnostic):
+       *   stored=0  V0=WBR V1=WBL V2=WTL V3=WTR
+       *   stored=1  V0=WBL V1=WTL V2=WTR V3=WBR
+       *   stored=2  V0=WTL V1=WTR V2=WBR V3=WBL
+       *   stored=3  V0=WTR V1=WBR V2=WBL V3=WTL
+       *
+       * Map.hpp labels world (x+1, y=0) as "WTR" but world-y=0 is
+       * the SOUTH edge of the rendered map (camera at viewpoint
+       * 0,20,120 looking at target 0,30,0 with map rotated 0.5 rad
+       * around X). World y=0 projects to the BOTTOM of the screen,
+       * so the world→screen mapping is:
+       *   WTR (x+1, y=0) → screen-BR    WBR (x+1, y=1) → screen-TR
+       *   WTL (x,   y=0) → screen-BL    WBL (x,   y=1) → screen-TL
+       *
+       * SGL Dual_Plane assigns texel UVs (0,0)/(1,0)/(1,1)/(0,1) to
+       * V[0..3]; sprHVflip mirrors both axes, so the texel-TL pixel
+       * actually rendered at V[k] is the one at the OPPOSITE V slot
+       * — i.e. texel TL appears at V[2]. Mapping V[2]'s screen
+       * corner per stored:
+       *   stored=0  V[2]=WTL → screen-BL → 90° CCW visible
+       *   stored=1  V[2]=WTR → screen-BR → 180° visible
+       *   stored=2  V[2]=WBR → screen-TR → 90° CW  visible
+       *   stored=3  V[2]=WBL → screen-TL → 0°      visible
+       *
+       * PawCraft left-shift count K → editor texel-TL position
+       * (computed via PAW_IDX_FOR_MY[0,3,2,1]):
+       *   K=0  TL → 0°       K=1  TR → 90° CW
+       *   K=2  BR → 180°     K=3  BL → 90° CCW
+       *
+       * To make editor stored=N display the same rotation Saturn
+       * stored=N displays, we need K(N):
+       *   stored=0 → K=3        stored=1 → K=2
+       *   stored=2 → K=1        stored=3 → K=0
+       *
+       * That's K = 3 - N, NOT a constant offset. The previous +3
+       * empirically "matched shiro" because shiro's rotated tiles
+       * happened to be on textures (0, 6, 19) where the partial
+       * +3 match (correct only at stored=0 and 2) was visually
+       * indistinguishable for stored=1 and 3 due to texture
+       * symmetry. Dansfield's directional textures (1, 2, 3, 12,
+       * 16) exposed the half-match.
+       *
+       * The negation formula matches all 4 stored values for both
+       * maps — verifiable on first run. */
+      const rot = (3 - ((tile.raw >> 6) & 3)) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();
