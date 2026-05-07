@@ -81,6 +81,14 @@ DEFAULT_PAK_PATH = os.environ.get(
 DEFAULT_CHARS_PAK_PATH = os.environ.get(
     "UTENYAA_CHARS_PAK",
     str(HERE.parent / "reference_pak" / "CHARS.PAK"))
+# Per-frame customizations live next to the editor's maps dir so a
+# single backup of /opt/utenyaa-editor/webapp/ captures both maps and
+# custom sprites. Each modified sprite is saved as a raw ARGB-1555
+# big-endian binary at <CUSTOM_CHARS_DIR>/<idx>.dat (W*H*2 bytes,
+# matching the on-disk PAK encoding of one NyaTexture's pixel block).
+DEFAULT_CUSTOM_CHARS_DIR = os.environ.get(
+    "UTENYAA_CUSTOM_CHARS_DIR",
+    str(HERE / "custom_chars"))
 DEFAULT_MODELS_DIR = os.environ.get(
     "UTENYAA_MODELS_DIR",
     str(HERE.parent / "reference_models"))
@@ -245,6 +253,9 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
     app.config["TEXTURES"] = tex_cache
     chars_cache = TextureCache(chars_pak_path)
     app.config["CHARS"] = chars_cache
+    custom_chars_dir = Path(DEFAULT_CUSTOM_CHARS_DIR)
+    custom_chars_dir.mkdir(parents=True, exist_ok=True)
+    app.config["CUSTOM_CHARS_DIR"] = str(custom_chars_dir)
     model_cache = ModelCache(models_dir)
     app.config["MODELS"] = model_cache
 
@@ -466,6 +477,78 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         return Response(png, mimetype="image/png",
                         headers={"Cache-Control": "public, max-age=3600"})
 
+    def _custom_char_path(idx: int) -> Path:
+        return Path(app.config["CUSTOM_CHARS_DIR"]) / f"{idx}.dat"
+
+    def _char_dimensions(idx: int) -> tuple[int, int]:
+        """Width/height of frame `idx` per the source CHARS.PAK."""
+        chars_cache._ensure_loaded()
+        if not 0 <= idx < len(chars_cache._textures):
+            raise IndexError(idx)
+        t = chars_cache._textures[idx]
+        return t.width, t.height
+
+    def _load_char_pixels(idx: int) -> tuple[int, int, list[int]]:
+        """Return (W, H, [argb1555 u16, ...]) for frame `idx`.
+        Custom file takes precedence; falls back to source PAK."""
+        w, h = _char_dimensions(idx)
+        cp = _custom_char_path(idx)
+        if cp.exists():
+            raw = cp.read_bytes()
+            if len(raw) != w * h * 2:
+                # Stale custom file (W or H changed). Ignore + use source.
+                pass
+            else:
+                pixels = [(raw[i*2] << 8) | raw[i*2+1] for i in range(w * h)]
+                return w, h, pixels
+        # Fall back to source PAK. We don't have ARGB-1555 ints cached
+        # in TextureCache (it stores RGBA), so re-parse the PAK byte
+        # range for this frame to recover the original u16 values.
+        chars_cache._ensure_loaded()
+        with open(chars_cache.pak_path, "rb") as f:
+            data = f.read()
+        # Walk frames up to idx; each frame is W(u16)+H(u16)+W*H*2 bytes.
+        off = 0
+        for i in range(idx + 1):
+            fw = (data[off] << 8) | data[off+1]
+            fh = (data[off+2] << 8) | data[off+3]
+            off += 4
+            if i == idx:
+                pixels = [(data[off + j*2] << 8) | data[off + j*2 + 1]
+                          for j in range(fw * fh)]
+                return fw, fh, pixels
+            off += fw * fh * 2
+        raise IndexError(idx)
+
+    def _save_char_pixels(idx: int, w: int, h: int, pixels: list[int]) -> int:
+        """Persist a modified sprite as raw ARGB-1555 BE bytes.
+        Returns the file size on disk."""
+        if w * h != len(pixels):
+            raise ValueError(f"pixel count mismatch: w*h={w*h} vs len={len(pixels)}")
+        raw = bytearray(w * h * 2)
+        for i, p in enumerate(pixels):
+            v = int(p) & 0xFFFF
+            raw[i*2]   = (v >> 8) & 0xFF
+            raw[i*2+1] = v & 0xFF
+        cp = _custom_char_path(idx)
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_bytes(bytes(raw))
+        # Drop PNG cache so next /api/chars/<idx>.png reflects the edit.
+        chars_cache._png_cache.pop(idx, None)
+        return len(raw)
+
+    def _custom_char_pixels_to_png(idx: int) -> bytes:
+        """Render the CUSTOM file (not PAK) to PNG via pak_format helpers."""
+        w, h, pixels = _load_char_pixels(idx)
+        rgba = bytearray(w * h * 4)
+        for i, p in enumerate(pixels):
+            R, G, B, A = pak_format._argb1555_to_rgba(p)
+            rgba[i*4]   = R
+            rgba[i*4+1] = G
+            rgba[i*4+2] = B
+            rgba[i*4+3] = A
+        return pak_format.encode_png(bytes(rgba), w, h)
+
     @app.route("/api/chars", methods=["GET"])
     def list_chars():
         """List all sprite frames in CHARS.PAK. The Saturn engine
@@ -477,7 +560,13 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
           frame 2 = facing north
           frame 3 = west / east
           frame 4 = dead/charred
-        Each character row is 5 consecutive PAK indices."""
+        Each character row is 5 consecutive PAK indices.
+        `customized` lists which indices have a saved edit."""
+        custom_dir = Path(app.config["CUSTOM_CHARS_DIR"])
+        customized = sorted(
+            int(p.stem) for p in custom_dir.glob("*.dat")
+            if p.stem.isdigit()
+        )
         return jsonify({
             "pak_path":   chars_cache.pak_path,
             "count":      chars_cache.count,
@@ -485,18 +574,194 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
             "frames_per_character": 5,
             "frame_labels": ["south", "diagonal", "north", "side", "dead"],
             "textures":   chars_cache.info(),
+            "customized": customized,
         })
 
     @app.route("/api/chars/<int:idx>.png", methods=["GET"])
     def char_png(idx: int):
-        """Serve one character sprite frame as a PNG."""
+        """Serve one character sprite frame as a PNG. If a custom
+        version exists at custom_chars/<idx>.dat it's served instead
+        of the original PAK frame."""
+        cp = _custom_char_path(idx)
+        from flask import Response
         try:
-            png = chars_cache.png(idx)
+            if cp.exists():
+                png = _custom_char_pixels_to_png(idx)
+            else:
+                png = chars_cache.png(idx)
         except IndexError:
             abort(404)
+        # No long cache — custom edits invalidate immediately.
+        return Response(png, mimetype="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
+    @app.route("/api/chars/<int:idx>/pixels", methods=["GET"])
+    def get_char_pixels(idx: int):
+        """Return raw ARGB-1555 pixels (u16 BE per pixel) for frame
+        `idx` as a JSON array of ints (length = W*H). Used by the
+        sprite editor to populate the editable canvas."""
+        try:
+            w, h, pixels = _load_char_pixels(idx)
+        except IndexError:
+            abort(404)
+        return jsonify({
+            "index":  idx,
+            "width":  w,
+            "height": h,
+            "pixels": pixels,
+            "custom": _custom_char_path(idx).exists(),
+        })
+
+    @app.route("/api/chars/<int:idx>/pixels", methods=["POST"])
+    def post_char_pixels(idx: int):
+        """Save modified pixels for frame `idx`. Body: JSON
+        {width, height, pixels:[argb1555 ints]}. Width/height MUST
+        match the source PAK frame size (no resize support yet)."""
+        if not _is_admin():
+            abort(403)
+        try:
+            src_w, src_h = _char_dimensions(idx)
+        except IndexError:
+            abort(404)
+        body = request.get_json(silent=True) or {}
+        w = int(body.get("width", 0))
+        h = int(body.get("height", 0))
+        pixels = body.get("pixels", [])
+        if w != src_w or h != src_h:
+            return jsonify({"error":
+                f"size {w}x{h} != source {src_w}x{src_h}"}), 400
+        if len(pixels) != w * h:
+            return jsonify({"error":
+                f"pixels length {len(pixels)} != w*h={w*h}"}), 400
+        bytes_written = _save_char_pixels(idx, w, h, pixels)
+        return jsonify({"index": idx, "bytes": bytes_written, "saved": True})
+
+    @app.route("/api/chars/<int:idx>/reset", methods=["POST"])
+    def reset_char(idx: int):
+        """Delete the custom override for frame `idx` so the original
+        PAK pixels are served again."""
+        if not _is_admin():
+            abort(403)
+        cp = _custom_char_path(idx)
+        existed = cp.exists()
+        if existed:
+            cp.unlink()
+            chars_cache._png_cache.pop(idx, None)
+        return jsonify({"index": idx, "had_custom": existed, "reset": True})
+
+    @app.route("/api/chars/template.png", methods=["GET"])
+    def chars_template():
+        """Build a 5×5 sheet PNG of all 25 sprite frames for the
+        operator to download, edit in any image editor, and re-upload.
+
+        Layout (16×16 each, 80×80 total native):
+            row    = character index (0..4)
+            column = frame within character (0..4 = south/diagonal/north/side/dead)
+            pak_idx = row*5 + column
+
+        Pixels: native 16×16 ARGB-1555 source. Transparent pixels get
+        a magenta tint (255, 0, 255, 0) so they're obvious in editors;
+        the import path treats anything with alpha<128 as transparent
+        regardless of color, so the magenta is just a visual marker.
+        """
+        chars_cache._ensure_loaded()
+        if not chars_cache._textures:
+            abort(404)
+        # All frames have the same W/H per the source PAK convention.
+        cell_w = chars_cache._textures[0].width
+        cell_h = chars_cache._textures[0].height
+        cols = 5
+        rows = 5
+        sheet_w = cols * cell_w
+        sheet_h = rows * cell_h
+        sheet = bytearray(sheet_w * sheet_h * 4)
+        for ci in range(min(rows * cols, len(chars_cache._textures))):
+            r = ci // cols
+            c = ci % cols
+            try:
+                _, _, pixels = _load_char_pixels(ci)
+            except IndexError:
+                continue
+            for py in range(cell_h):
+                for px in range(cell_w):
+                    p = pixels[py * cell_w + px]
+                    R, G, B, A = pak_format._argb1555_to_rgba(p)
+                    sx = c * cell_w + px
+                    sy = r * cell_h + py
+                    di = (sy * sheet_w + sx) * 4
+                    if A == 0:
+                        # Magenta marker for transparency — easy to spot.
+                        sheet[di]   = 255
+                        sheet[di+1] = 0
+                        sheet[di+2] = 255
+                        sheet[di+3] = 0
+                    else:
+                        sheet[di]   = R
+                        sheet[di+1] = G
+                        sheet[di+2] = B
+                        sheet[di+3] = 255
+        png = pak_format.encode_png(bytes(sheet), sheet_w, sheet_h)
         from flask import Response
         return Response(png, mimetype="image/png",
-                        headers={"Cache-Control": "public, max-age=3600"})
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Content-Disposition":
+                                f'attachment; filename="utenyaa-chars-template-{sheet_w}x{sheet_h}.png"',
+                        })
+
+    @app.route("/api/chars/import", methods=["POST"])
+    def chars_import():
+        """Accept a PNG sheet (5 cols × 5 rows of 16×16 frames) and
+        save each cell as a custom override. Body: raw PNG bytes
+        (Content-Type: image/png) OR multipart form with 'file' field.
+        Returns per-frame status."""
+        if not _is_admin():
+            abort(403)
+        chars_cache._ensure_loaded()
+        if not chars_cache._textures:
+            return jsonify({"error": "CHARS.PAK not loaded"}), 500
+        cell_w = chars_cache._textures[0].width
+        cell_h = chars_cache._textures[0].height
+        cols, rows = 5, 5
+        expected_w = cols * cell_w
+        expected_h = rows * cell_h
+
+        # Accept either raw image/png body or a multipart form upload.
+        data = b""
+        if request.content_type and request.content_type.startswith("image/png"):
+            data = request.get_data() or b""
+        else:
+            up = request.files.get("file")
+            if up is not None:
+                data = up.read() or b""
+        if not data:
+            return jsonify({"error": "no PNG data in request"}), 400
+
+        try:
+            w, h, rgba = pak_format.decode_png_rgba(data)
+        except ValueError as e:
+            return jsonify({"error": f"PNG decode failed: {e}"}), 400
+        if w != expected_w or h != expected_h:
+            return jsonify({
+                "error":
+                    f"sheet must be {expected_w}x{expected_h} (got {w}x{h}); "
+                    "use the /api/chars/template.png download as a starting point."
+            }), 400
+
+        saved = []
+        for ci in range(rows * cols):
+            r = ci // cols
+            c = ci % cols
+            cell_rgba = bytearray(cell_w * cell_h * 4)
+            for py in range(cell_h):
+                src = ((r * cell_h + py) * w + c * cell_w) * 4
+                cell_rgba[py * cell_w * 4 : (py + 1) * cell_w * 4] = \
+                    rgba[src : src + cell_w * 4]
+            pixels = pak_format.rgba8_to_argb1555(bytes(cell_rgba), cell_w, cell_h)
+            _save_char_pixels(ci, cell_w, cell_h, pixels)
+            saved.append(ci)
+        return jsonify({"saved": saved, "count": len(saved),
+                        "sheet": f"{w}x{h}", "cell": f"{cell_w}x{cell_h}"})
 
     @app.route("/api/models", methods=["GET"])
     def list_models():

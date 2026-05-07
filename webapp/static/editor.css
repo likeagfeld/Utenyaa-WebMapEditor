@@ -406,3 +406,88 @@ dialog::backdrop { background: rgba(0,0,0,0.7); }
   image-rendering: -moz-crisp-edges;
   image-rendering: crisp-edges;
 }
+
+/* ---- Sprites toolbar (Phase 2 buttons) ----------------------------- */
+.sprites-toolbar-spacer { flex: 1; }
+.sprites-toolbar #btn-sprites-download,
+.sprites-toolbar #btn-sprites-import-wrap,
+.sprites-toolbar #btn-sprites-help,
+.sprites-toolbar #btn-sprites-refresh {
+  margin-left: 6px;
+}
+.sprites-toolbar #btn-sprites-import-wrap {
+  cursor: pointer;
+}
+.sprites-toolbar #btn-sprites-import-wrap input[type="file"] {
+  display: none;
+}
+
+/* ---- Sprite-detail action bar + tool bar ---------------------------- */
+.sprites-action-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-left: 12px;
+}
+.sprites-action-bar #sprites-status {
+  margin-left: 8px;
+  font-size: 11px;
+}
+.sprites-tool-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 0;
+  border-top: 1px solid #2a3a55;
+  border-bottom: 1px solid #2a3a55;
+  margin-bottom: 8px;
+}
+.sprites-tool-bar label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+.sprites-tool-bar input[type="color"] {
+  width: 40px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid #2a3a55;
+  background: #16213e;
+  cursor: pointer;
+}
+#sprites-color-swatch {
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  border: 1px solid #2a3a55;
+  border-radius: 3px;
+  vertical-align: middle;
+}
+
+/* ---- Customized cell highlight ------------------------------------- */
+.sprites-cell.customized {
+  border-color: #f5a623;
+  box-shadow: 0 0 0 1px #f5a623 inset;
+}
+.sprites-cell.customized::after {
+  content: "★";
+  position: absolute;
+  top: 2px;
+  right: 4px;
+  color: #f5a623;
+  font-size: 11px;
+}
+.sprites-cell { position: relative; }
+
+/* ---- Help dialog --------------------------------------------------- */
+#sprites-help-dialog {
+  background: #16213e;
+  color: #e0e0e0;
+  border: 1px solid #2a3a55;
+  border-radius: 4px;
+  padding: 16px;
+  max-width: 580px;
+}
+#sprites-help-dialog::backdrop { background: rgba(0,0,0,0.7); }
+#sprites-help-dialog ul { list-style: disc; }

@@ -129,6 +129,114 @@ def encode_png(rgba: bytes, width: int, height: int) -> bytes:
     return sig + chunk(b"IHDR", ihdr) + chunk(b"IDAT", idat) + chunk(b"IEND", b"")
 
 
+# ---- PNG decoding (stdlib only) ------------------------------------------
+#
+# Minimal RGBA decoder for the template-import path. Supports 8-bit
+# RGBA non-interlaced PNGs with all five PNG filter types — covers
+# our own encode_png output AND anything Photoshop / GIMP / Aseprite
+# saves out. Other formats raise ValueError.
+
+def decode_png_rgba(data: bytes) -> tuple[int, int, bytes]:
+    """Decode an 8-bit RGBA non-interlaced PNG. Returns (W, H, rgba)."""
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        raise ValueError("not a PNG (missing signature)")
+    off = 8
+    width = height = 0
+    bit_depth = 0
+    color_type = 0
+    interlace = 0
+    idat_chunks: list[bytes] = []
+    while off + 8 <= len(data):
+        clen = struct.unpack(">I", data[off:off+4])[0]
+        ctype = data[off+4:off+8]
+        cdata = data[off+8:off+8+clen]
+        if ctype == b"IHDR":
+            width, height = struct.unpack(">II", cdata[:8])
+            bit_depth, color_type = cdata[8], cdata[9]
+            interlace = cdata[12]
+            if bit_depth != 8:
+                raise ValueError(f"only 8-bit PNGs supported (got {bit_depth}-bit)")
+            if color_type != 6:
+                raise ValueError(
+                    f"only RGBA PNGs supported (color type 6); got {color_type}")
+            if interlace != 0:
+                raise ValueError("interlaced PNGs unsupported")
+        elif ctype == b"IDAT":
+            idat_chunks.append(cdata)
+        elif ctype == b"IEND":
+            break
+        off += 12 + clen   # length(4) + type(4) + data + crc(4)
+    if not idat_chunks:
+        raise ValueError("no IDAT chunks")
+    raw = zlib.decompress(b"".join(idat_chunks))
+
+    bpp = 4   # RGBA
+    stride = width * bpp
+    out = bytearray(width * height * bpp)
+    rin = 0
+    rout = 0
+    prev_row = bytes(stride)
+    for _y in range(height):
+        if rin + 1 + stride > len(raw):
+            raise ValueError("PNG IDAT truncated")
+        ftype = raw[rin]; rin += 1
+        row = bytearray(raw[rin:rin+stride]); rin += stride
+        if ftype == 0:
+            pass
+        elif ftype == 1:   # Sub
+            for x in range(bpp, stride):
+                row[x] = (row[x] + row[x - bpp]) & 0xFF
+        elif ftype == 2:   # Up
+            for x in range(stride):
+                row[x] = (row[x] + prev_row[x]) & 0xFF
+        elif ftype == 3:   # Average
+            for x in range(stride):
+                left = row[x - bpp] if x >= bpp else 0
+                row[x] = (row[x] + ((left + prev_row[x]) >> 1)) & 0xFF
+        elif ftype == 4:   # Paeth
+            for x in range(stride):
+                left = row[x - bpp] if x >= bpp else 0
+                up = prev_row[x]
+                ul = prev_row[x - bpp] if x >= bpp else 0
+                p = left + up - ul
+                pa, pb, pc = abs(p - left), abs(p - up), abs(p - ul)
+                if pa <= pb and pa <= pc:
+                    pred = left
+                elif pb <= pc:
+                    pred = up
+                else:
+                    pred = ul
+                row[x] = (row[x] + pred) & 0xFF
+        else:
+            raise ValueError(f"unknown PNG filter type {ftype}")
+        out[rout:rout+stride] = row
+        rout += stride
+        prev_row = bytes(row)
+    return width, height, bytes(out)
+
+
+def rgba8_to_argb1555(rgba: bytes, w: int, h: int) -> list[int]:
+    """Quantize RGBA8 pixels to Saturn ARGB-1555 u16 ints.
+    Pixels with alpha < 128 become 0x0000 (fully transparent).
+    Pixels with alpha >= 128 become opaque (alpha bit set)."""
+    if len(rgba) != w * h * 4:
+        raise ValueError(f"rgba length {len(rgba)} != w*h*4 = {w*h*4}")
+    out = [0] * (w * h)
+    for i in range(w * h):
+        R = rgba[i*4]
+        G = rgba[i*4 + 1]
+        B = rgba[i*4 + 2]
+        A = rgba[i*4 + 3]
+        if A < 128:
+            out[i] = 0x0000   # fully transparent
+            continue
+        r5 = (R >> 3) & 0x1F
+        g5 = (G >> 3) & 0x1F
+        b5 = (B >> 3) & 0x1F
+        out[i] = 0x8000 | (b5 << 10) | (g5 << 5) | r5
+    return out
+
+
 # ---- CLI: dump a .PAK to a directory of PNGs ------------------------------
 
 def main():

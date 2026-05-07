@@ -190,17 +190,70 @@
     </details>
     <div class="view-pane view-sprites" style="display:none">
       <div class="sprites-toolbar">
-        <span class="muted">CHARS.PAK — 5 characters × 5 frames each. Click a frame to enlarge.</span>
+        <span class="muted">CHARS.PAK — 5 characters × 5 frames each. Click a frame to edit.</span>
+        <span class="sprites-toolbar-spacer"></span>
+        <a id="btn-sprites-download" class="btn"
+           href="api/chars/template.png" download="utenyaa-chars-template.png"
+           title="Download a single PNG sheet of all 25 sprites (80×80, 5 cols × 5 rows of 16×16 frames). Edit in any image editor that handles RGBA PNG (Photoshop, GIMP, Aseprite, Paint.NET) and re-upload via Import.">Download template</a>
+        <label id="btn-sprites-import-wrap" class="btn"
+               title="Upload an edited template PNG. Must be 80×80 RGBA. Each cell becomes a custom sprite override; pixels with alpha &lt; 128 become transparent on Saturn.">Import template
+          <input type="file" id="sprites-import-file" accept="image/png" style="display:none">
+        </label>
+        <button id="btn-sprites-help" class="btn"
+                title="Show the design guide.">?</button>
         <button id="btn-sprites-refresh" class="btn">Refresh</button>
       </div>
       <div id="sprites-grid" class="sprites-grid"></div>
       <div id="sprites-detail" class="sprites-detail" style="display:none">
         <div class="sprites-detail-header">
           <span id="sprites-detail-label" class="sprites-detail-label"></span>
-          <button id="btn-sprites-close" class="btn">Close</button>
+          <span id="sprites-action-bar" class="sprites-action-bar"></span>
         </div>
+        <div id="sprites-tool-bar" class="sprites-tool-bar"></div>
         <canvas id="sprites-detail-canvas" width="256" height="256"></canvas>
       </div>
+      <dialog id="sprites-help-dialog">
+        <form method="dialog">
+          <h2 style="color:#f5a623;margin-bottom:8px">Sprite design guide</h2>
+          <div style="line-height:1.5;font-size:13px;max-width:520px">
+            <p><b>Layout.</b> Each character has 5 frames; the engine
+            picks one based on facing angle:</p>
+            <ul style="margin-left:18px;margin-top:4px">
+              <li><b>frame 0 — south:</b> facing the camera (default)</li>
+              <li><b>frame 1 — diagonal:</b> SW / SE</li>
+              <li><b>frame 2 — north:</b> facing away</li>
+              <li><b>frame 3 — side:</b> W / E (mirror-flipped per side)</li>
+              <li><b>frame 4 — dead:</b> charred / explosion KO sprite</li>
+            </ul>
+
+            <p style="margin-top:10px"><b>Template.</b> 80×80 RGBA PNG.
+            5 columns × 5 rows of 16×16 cells. Row = character index,
+            column = frame index. Magenta pixels in the download
+            template are placeholder transparency markers — replace
+            with real colors or leave alpha = 0 on import.</p>
+
+            <p style="margin-top:10px"><b>Saturn quantization.</b> The
+            VDP1 only knows ARGB-1555 (5 bits R, G, B; 1 bit alpha).
+            Your 8-bit-per-channel pixels get quantized on import
+            (top 5 bits kept). Alpha &lt; 128 → fully transparent;
+            alpha ≥ 128 → fully opaque. There's no alpha blending —
+            partial transparency is not representable on hardware.</p>
+
+            <p style="margin-top:10px"><b>Editor recommendations.</b>
+            Aseprite, GIMP, Photoshop, or Paint.NET all work. Set
+            canvas to 80×80, disable smoothing/anti-aliasing, and
+            export as PNG (8-bit RGBA). The template's 16×16 cells
+            give you exactly enough room — don't draw across cell
+            borders since each cell becomes one sprite frame.</p>
+
+            <p style="margin-top:10px"><b>In-game delivery.</b> Phase
+            2 saves edits to the editor server only. Phase 3 (next
+            iteration) will stream custom sprites to the Saturn
+            during a match so other players see your character.</p>
+          </div>
+          <menu style="margin-top:14px"><button value="ok">Got it</button></menu>
+        </form>
+      </dialog>
     </div>
   </section>
 
