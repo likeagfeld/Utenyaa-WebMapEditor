@@ -875,9 +875,10 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         """Save a custom character. Body:
             {name: string, creator: string,
              frames: [[<256 argb1555 ints>], ...5 frames]}
-        Validates dimensions and pixel ranges."""
-        if not _is_admin():
-            abort(403)
+        Public-writeable: ANY visitor can author + save custom
+        characters. Only DELETE is admin-only (per operator directive).
+        Validates dimensions and pixel ranges to keep the on-disk store
+        well-formed."""
         err = _validate_char_slug(slug)
         if err: return jsonify({"error": err}), 400
         body = request.get_json(silent=True) or {}
@@ -1080,9 +1081,10 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
 
         Built-in characters themselves are READ-ONLY in the editor —
         users clone them as starting points for new custom characters.
-        The original CHARS.PAK is never modified."""
-        if not _is_admin():
-            abort(403)
+        The original CHARS.PAK is never modified.
+
+        Public-writeable (no admin gate) — per operator directive:
+        anyone visiting the public mapeditor can clone+author."""
         body = request.get_json(silent=True) or {}
         char_idx = body.get("char_idx", 0)
         name = (body.get("name") or "").strip()
@@ -1135,9 +1137,10 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         """Duplicate an existing custom character to a new slug. Body:
         {name: string, creator: string, slug?: string}.
         Frames are copied verbatim from the source slug. New character
-        is independently editable / deletable."""
-        if not _is_admin():
-            abort(403)
+        is independently editable / deletable.
+
+        Public-writeable (no admin gate) — anyone can clone an existing
+        custom into their own variant."""
         err = _validate_char_slug(slug)
         if err: return jsonify({"error": err}), 400
         src_path = _custom_character_path(slug)
@@ -1190,9 +1193,10 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         retained (for new characters, name defaults to slug).
 
         IMPORTANT: This OVERRIDES the named custom character. The
-        built-in CHARS.PAK is never modified by this endpoint."""
-        if not _is_admin():
-            abort(403)
+        built-in CHARS.PAK is never modified by this endpoint.
+
+        Public-writeable (no admin gate) — anyone can upload PNG-edited
+        custom character sprites."""
         err = _validate_char_slug(slug)
         if err: return jsonify({"error": err}), 400
 

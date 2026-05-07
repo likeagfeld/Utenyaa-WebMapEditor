@@ -1076,32 +1076,31 @@
     applyCcAdminUi();
   }
   function applyCcAdminUi() {
-    /* These elements are write/destructive — hide for non-admin
-     * (public-facing /mapeditor) so users don't get to a 403 dead end. */
-    const writeOnly = [
-      '#btn-cc-new',                       // create new character
-      '#btn-cc-save',                      // save edits
-      '#btn-cc-delete',                    // delete character
-      '#btn-cc-upload-png-wrap',           // upload PNG (replace pixels)
-      '#cc-upload-png',                    // (file input child)
-      '#btn-sprites-reset-all',            // reset built-in overrides
-      '#sprites-import-file',              // bulk import (legacy, hidden)
+    /* Custom-character authoring is PUBLIC: anyone can create, save,
+     * clone, and upload sprites. Only the destructive actions are
+     * admin-gated (per operator directive). */
+    const adminOnly = [
+      '#btn-cc-delete',                    // delete custom character
+      '#btn-sprites-reset-all',            // reset all built-in overrides
+      '#sprites-import-file',              // bulk built-in import
     ];
-    for (const sel of writeOnly) {
+    for (const sel of adminOnly) {
       const el = document.querySelector(sel);
       if (el) el.style.display = ccIsAdmin ? '' : 'none';
     }
-    /* Per-built-in-frame edits (Phase 2 paint canvas) also write —
-     * hide the Save/Reset buttons inside the detail action bar.
-     * Those are created dynamically by setupSaveBar() so the gate
-     * needs to apply on every detail open too. */
-    const detailActions = document.querySelectorAll(
-      '#sprites-action-bar #btn-sprites-save, '
-      + '#sprites-action-bar .btn:not(#btn-sprites-close)'
-    );
+    /* The "Clone Char N as new custom" action button on the built-in
+     * detail view should be visible for everyone (cloning a built-in
+     * doesn't modify the built-in — it creates a new editable custom).
+     * Built-in's own Save/Reset (per-frame paint editor leftovers)
+     * are admin-only since they DO mutate the built-in's overrides. */
+    const detailActions = document.querySelectorAll('#sprites-action-bar .btn');
     detailActions.forEach((b) => {
-      // Don't hide the Close button text label.
+      if (b.id === 'btn-builtin-clone') {
+        b.style.display = '';   // always visible
+        return;
+      }
       if (b.textContent === 'Close') return;
+      /* Anything else (built-in Save/Reset) is admin-only. */
       b.style.display = ccIsAdmin ? '' : 'none';
     });
   }
