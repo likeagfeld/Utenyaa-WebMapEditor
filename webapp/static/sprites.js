@@ -147,47 +147,93 @@
 
   /* ---- Editor (Phase 2) ----------------------------------------- */
 
+  /* Built-in sprites are READ-ONLY in the editor. Clicking a frame
+   * opens an enlarged view + a "Clone as new custom character" action
+   * (operator directive: original characters cannot be edited; users
+   * clone them as starting points for their own customs). */
   async function openEditor(idx, charIdx, frameIdx, meta) {
     const detail = $('#sprites-detail');
     const label  = $('#sprites-detail-label');
+    const actionBar = $('#sprites-action-bar');
+    const toolBar = $('#sprites-tool-bar');
     if (!detail || !label) return;
     detail.style.display = '';
+    edit = null;   // no longer using paint-edit state for built-ins
 
     label.textContent =
-      `Index ${idx} — ${CHAR_NAMES[charIdx] || ('Char ' + charIdx)} `
-      + `• ${FRAME_LABELS[frameIdx] || ('frame ' + frameIdx)} • Loading…`;
+      `Built-in: ${CHAR_NAMES[charIdx] || ('Char ' + charIdx)} `
+      + `• ${FRAME_LABELS[frameIdx] || ('frame ' + frameIdx)} • read-only`;
 
-    let pixData;
-    try {
-      const r = await fetch(`api/chars/${idx}/pixels`);
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      pixData = await r.json();
-    } catch (e) {
-      label.textContent = `Index ${idx} — failed to load: ${e.message || e}`;
-      return;
+    /* Action bar: Clone (admin only) + Close. No save / no reset. */
+    if (actionBar) {
+      actionBar.innerHTML = '';
+      const cloneBtn = document.createElement('button');
+      cloneBtn.id = 'btn-builtin-clone';
+      cloneBtn.className = 'btn primary';
+      cloneBtn.textContent = `Clone Char ${charIdx} as new custom`;
+      cloneBtn.title = "Create a new editable custom character pre-filled with all 5 frames of this built-in character. The built-in itself stays unchanged.";
+      cloneBtn.addEventListener('click', () => cloneBuiltin(charIdx));
+      actionBar.appendChild(cloneBtn);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'btn';
+      closeBtn.textContent = 'Close';
+      closeBtn.addEventListener('click', () => { detail.style.display = 'none'; });
+      actionBar.appendChild(closeBtn);
     }
+    /* Tool bar: empty (no color picker — read-only view). */
+    if (toolBar) toolBar.innerHTML = '';
 
-    edit = {
-      idx, charIdx, frameIdx,
-      width:  pixData.width,
-      height: pixData.height,
-      pixels: new Uint16Array(pixData.pixels),
-      selectedColor: 0xFFFF,  // pure white opaque (Saturn 0xFFFF = R31 G31 B31 + alpha)
-      isCustom: !!pixData.custom,
-      dirty: false,
-      drawing: false,
-    };
+    /* Render the sprite to the detail canvas as a read-only preview. */
+    const canvas = $('#sprites-detail-canvas');
+    if (canvas) {
+      canvas.width  = (meta.width  || 16) * PIXEL_SCALE;
+      canvas.height = (meta.height || 16) * PIXEL_SCALE;
+      const fresh = canvas.cloneNode(false);
+      canvas.parentNode.replaceChild(fresh, canvas);
+      const img = new Image();
+      img.onload = () => {
+        const ctx = fresh.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, fresh.width, fresh.height);
+        ctx.drawImage(img, 0, 0, fresh.width, fresh.height);
+      };
+      img.src = `api/chars/${idx}.png?t=${Date.now()}`;
+    }
+    applyCcAdminUi();
+  }
 
-    label.textContent =
-      `Index ${idx} — ${CHAR_NAMES[charIdx] || ('Char ' + charIdx)} `
-      + `• ${FRAME_LABELS[frameIdx] || ('frame ' + frameIdx)} `
-      + `• ${edit.width}×${edit.height}`
-      + (edit.isCustom ? ' • CUSTOM' : '');
-
-    setupCanvas();
-    setupColorPicker();
-    setupSaveBar();
-    redraw();
+  async function cloneBuiltin(charIdx) {
+    const name = prompt(
+      `Clone Char ${charIdx} into a new editable custom character.\n`
+      + `Name (required):`, `MyChar${charIdx}`);
+    if (!name || !name.trim()) return;
+    const creator = prompt('Creator name (optional, shown alongside the character):', '') || '';
+    try {
+      const r = await fetch('api/custom_chars/clone_builtin', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          char_idx: charIdx,
+          name:     name.trim(),
+          creator:  creator.trim(),
+        }),
+      });
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert('Clone failed: ' + (result.error || ('HTTP ' + r.status)));
+        return;
+      }
+      /* Hide the read-only built-in view, refresh the customs list,
+       * and pop straight into the new character's editor. */
+      const detail = $('#sprites-detail');
+      if (detail) detail.style.display = 'none';
+      await loadCustomCharsList();
+      await openCcEditor(result.slug);
+    } catch (e) {
+      alert('Clone failed: ' + (e.message || e));
+    }
   }
 
   function setupCanvas() {
@@ -627,8 +673,44 @@
       editBtn.textContent = 'Edit';
       editBtn.addEventListener('click', () => openCcEditor(c.slug));
       actions.appendChild(editBtn);
+
+      const cloneBtn = document.createElement('button');
+      cloneBtn.className = 'btn cc-clone-btn';
+      cloneBtn.textContent = 'Clone';
+      cloneBtn.title = 'Create a new editable custom character pre-filled with this character\'s frames.';
+      cloneBtn.addEventListener('click', () => cloneCustom(c.slug, c.name));
+      actions.appendChild(cloneBtn);
       card.appendChild(actions);
       list.appendChild(card);
+    }
+  }
+
+  async function cloneCustom(srcSlug, srcName) {
+    const name = prompt(
+      `Clone "${srcName || srcSlug}" into a new editable custom character.\n`
+      + `Name (required):`, `${srcName || srcSlug} (copy)`);
+    if (!name || !name.trim()) return;
+    const creator = prompt('Creator name (optional):', '') || '';
+    try {
+      const r = await fetch(
+        `api/custom_chars/${encodeURIComponent(srcSlug)}/clone`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            name:    name.trim(),
+            creator: creator.trim(),
+          }),
+        });
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        alert('Clone failed: ' + (result.error || ('HTTP ' + r.status)));
+        return;
+      }
+      await loadCustomCharsList();
+      await openCcEditor(result.slug);
+    } catch (e) {
+      alert('Clone failed: ' + (e.message || e));
     }
   }
 
@@ -980,6 +1062,50 @@
     }
   }
 
+  /* Admin-only UI gating. The backend already enforces admin on all
+   * mutating endpoints (POST/DELETE), so this is purely cosmetic —
+   * hides buttons that would only return 403 in PUBLIC_MODE. Mirrors
+   * editor.js's existing /api/admin/status pattern. */
+  let ccIsAdmin = false;
+  async function refreshCcAdminStatus() {
+    try {
+      const r = await fetch('api/admin/status');
+      const j = await r.json().catch(() => ({}));
+      ccIsAdmin = !!j.is_admin;
+    } catch { ccIsAdmin = false; }
+    applyCcAdminUi();
+  }
+  function applyCcAdminUi() {
+    /* These elements are write/destructive — hide for non-admin
+     * (public-facing /mapeditor) so users don't get to a 403 dead end. */
+    const writeOnly = [
+      '#btn-cc-new',                       // create new character
+      '#btn-cc-save',                      // save edits
+      '#btn-cc-delete',                    // delete character
+      '#btn-cc-upload-png-wrap',           // upload PNG (replace pixels)
+      '#cc-upload-png',                    // (file input child)
+      '#btn-sprites-reset-all',            // reset built-in overrides
+      '#sprites-import-file',              // bulk import (legacy, hidden)
+    ];
+    for (const sel of writeOnly) {
+      const el = document.querySelector(sel);
+      if (el) el.style.display = ccIsAdmin ? '' : 'none';
+    }
+    /* Per-built-in-frame edits (Phase 2 paint canvas) also write —
+     * hide the Save/Reset buttons inside the detail action bar.
+     * Those are created dynamically by setupSaveBar() so the gate
+     * needs to apply on every detail open too. */
+    const detailActions = document.querySelectorAll(
+      '#sprites-action-bar #btn-sprites-save, '
+      + '#sprites-action-bar .btn:not(#btn-sprites-close)'
+    );
+    detailActions.forEach((b) => {
+      // Don't hide the Close button text label.
+      if (b.textContent === 'Close') return;
+      b.style.display = ccIsAdmin ? '' : 'none';
+    });
+  }
+
   function initCustomChars() {
     const newBtn = $('#btn-cc-new');
     if (newBtn) newBtn.addEventListener('click', startCcNew);
@@ -1010,12 +1136,31 @@
   loadSprites = async function () {
     await origLoadSprites();
     loadCustomCharsList();
+    /* Refresh admin status on every Sprites-tab open so the gating is
+     * always current (e.g., after admin login/logout via the topbar). */
+    refreshCcAdminStatus();
+  };
+
+  /* Re-apply admin gating after the per-frame Phase 2 detail editor
+   * opens, since setupSaveBar() recreates Save/Reset/Close buttons
+   * dynamically each open. */
+  const origOpenEditor = openEditor;
+  openEditor = async function (...args) {
+    await origOpenEditor.apply(this, args);
+    applyCcAdminUi();
+  };
+  /* Same for the Custom Character editor. */
+  const origSetupCcEditor = setupCcEditor;
+  setupCcEditor = function (...args) {
+    origSetupCcEditor.apply(this, args);
+    applyCcAdminUi();
   };
 
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', () => { init(); initCustomChars(); });
+    document.addEventListener('DOMContentLoaded', () => {
+      init(); initCustomChars(); refreshCcAdminStatus();
+    });
   } else {
-    init();
-    initCustomChars();
+    init(); initCustomChars(); refreshCcAdminStatus();
   }
 })();

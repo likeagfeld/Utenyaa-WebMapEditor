@@ -969,25 +969,48 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
 
     @app.route("/api/custom_chars/template.png", methods=["GET"])
     def custom_character_blank_template():
-        """Single-character blank template — 5 frames horizontal,
-        rendered at 16× scale (1280×256) with magenta transparency
-        markers on every pixel. Ready for the user to paint in any
-        image editor and re-upload via /api/custom_chars/<slug>/import."""
+        """Single-character starter template — 5 frames horizontal,
+        rendered at 16× scale (1280×256). Pre-filled with the FIRST
+        built-in character (character 0, the catgirl) from CHARS.PAK
+        so users have a real sprite to overwrite rather than a blank
+        magenta canvas. Each Saturn pixel becomes a 16×16 block.
+        Transparent source pixels are rendered as magenta markers
+        (alpha=0 still set, so import treats them as transparent)."""
+        chars_cache._ensure_loaded()
+        if not chars_cache._textures:
+            abort(404)
         sx = TEMPLATE_SCALE
         cell_w, cell_h = CUSTOM_CHAR_W, CUSTOM_CHAR_H
         cols, rows = CUSTOM_CHAR_FRAMES, 1
         sheet_w = cols * cell_w * sx
         sheet_h = rows * cell_h * sx
         sheet = bytearray(sheet_w * sheet_h * 4)
-        # Fill with magenta (transparency marker).
-        for i in range(0, len(sheet), 4):
-            sheet[i] = 255; sheet[i+1] = 0; sheet[i+2] = 255; sheet[i+3] = 0
-        # Draw faint cell borders so users see frame boundaries.
-        for ci in range(cols):
-            for py in range(0, sheet_h):
-                bx = ci * cell_w * sx
-                bi = (py * sheet_w + bx) * 4
-                sheet[bi]   = 64; sheet[bi+1] = 64; sheet[bi+2] = 64; sheet[bi+3] = 255
+        # Source: first built-in character (char 0, frames 0..4).
+        # Falls back to magenta if anything's missing.
+        for fi in range(cols):
+            pak_idx = fi   # char 0 frames are PAK indices 0..4
+            try:
+                _, _, pixels = _load_char_pixels(pak_idx)
+            except IndexError:
+                pixels = [0] * (cell_w * cell_h)
+            for py in range(cell_h):
+                for px in range(cell_w):
+                    p = pixels[py * cell_w + px] if py * cell_w + px < len(pixels) else 0
+                    R, G, B, A = pak_format._argb1555_to_rgba(p)
+                    if A == 0:
+                        rr, gg, bb, aa = 255, 0, 255, 0
+                    else:
+                        rr, gg, bb, aa = R, G, B, 255
+                    base_x = (fi * cell_w + px) * sx
+                    base_y = py * sx
+                    for dy in range(sx):
+                        di = ((base_y + dy) * sheet_w + base_x) * 4
+                        for dx in range(sx):
+                            sheet[di]   = rr
+                            sheet[di+1] = gg
+                            sheet[di+2] = bb
+                            sheet[di+3] = aa
+                            di += 4
         png = pak_format.encode_png(bytes(sheet), sheet_w, sheet_h)
         from flask import Response
         return Response(png, mimetype="image/png",
@@ -1046,6 +1069,115 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
                             "Content-Disposition":
                                 f'attachment; filename="utenyaa-custom-{slug}-template.png"',
                         })
+
+    @app.route("/api/custom_chars/clone_builtin", methods=["POST"])
+    def clone_builtin_character():
+        """Create a new custom character pre-populated with the 5
+        sprite frames of a built-in CHARS.PAK character. Body:
+        {char_idx: 0..4, name: string, creator: string}.
+
+        Built-in characters themselves are READ-ONLY in the editor —
+        users clone them as starting points for new custom characters.
+        The original CHARS.PAK is never modified."""
+        if not _is_admin():
+            abort(403)
+        body = request.get_json(silent=True) or {}
+        char_idx = body.get("char_idx", 0)
+        name = (body.get("name") or "").strip()
+        creator = (body.get("creator") or "").strip()
+        if not isinstance(char_idx, int) or not (0 <= char_idx < 5):
+            return jsonify({"error": "char_idx must be 0..4"}), 400
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        slug = body.get("slug") or ""
+        if slug:
+            err = _validate_char_slug(slug)
+            if err: return jsonify({"error": err}), 400
+        else:
+            # Auto-slug from name; same rules as JS slugify in editor.
+            import re
+            s = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-")
+            slug = (s or "char")[:32]
+        # Refuse overwrite of an existing slug — caller should disambiguate.
+        if _custom_character_path(slug).exists():
+            return jsonify({
+                "error": f"slug {slug!r} already exists; pick a different name"
+            }), 409
+
+        frames = []
+        for fi in range(CUSTOM_CHAR_FRAMES):
+            pak_idx = char_idx * 5 + fi
+            try:
+                _, _, pixels = _load_char_pixels(pak_idx)
+            except IndexError:
+                pixels = [0] * (CUSTOM_CHAR_W * CUSTOM_CHAR_H)
+            frames.append(list(pixels))
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = {
+            "schema_version": CUSTOM_CHAR_SCHEMA_VERSION,
+            "slug": slug, "name": name, "creator": creator,
+            "width":  CUSTOM_CHAR_W, "height": CUSTOM_CHAR_H,
+            "frames": frames,
+            "cloned_from_builtin": char_idx,
+            "created":  now, "modified": now,
+        }
+        _custom_character_path(slug).write_text(json.dumps(record))
+        return jsonify({"saved": True, "slug": slug, "name": name,
+                        "creator": creator,
+                        "cloned_from_builtin": char_idx})
+
+    @app.route("/api/custom_chars/<slug>/clone", methods=["POST"])
+    def clone_custom_character(slug):
+        """Duplicate an existing custom character to a new slug. Body:
+        {name: string, creator: string, slug?: string}.
+        Frames are copied verbatim from the source slug. New character
+        is independently editable / deletable."""
+        if not _is_admin():
+            abort(403)
+        err = _validate_char_slug(slug)
+        if err: return jsonify({"error": err}), 400
+        src_path = _custom_character_path(slug)
+        if not src_path.exists():
+            return jsonify({"error": "source not found"}), 404
+        try:
+            src = json.loads(src_path.read_text())
+        except ValueError as e:
+            return jsonify({"error": f"corrupt source: {e}"}), 500
+
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        creator = (body.get("creator") or "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        new_slug = body.get("slug") or ""
+        if new_slug:
+            err = _validate_char_slug(new_slug)
+            if err: return jsonify({"error": err}), 400
+        else:
+            import re
+            s = re.sub(r"[^a-z0-9_-]+", "-", name.lower()).strip("-")
+            new_slug = (s or "char")[:32]
+        if _custom_character_path(new_slug).exists():
+            return jsonify({
+                "error": f"slug {new_slug!r} already exists; pick a different name"
+            }), 409
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = {
+            "schema_version": CUSTOM_CHAR_SCHEMA_VERSION,
+            "slug": new_slug, "name": name, "creator": creator,
+            "width":  src.get("width", CUSTOM_CHAR_W),
+            "height": src.get("height", CUSTOM_CHAR_H),
+            "frames": [list(fr) for fr in src.get("frames", [])],
+            "cloned_from": slug,
+            "created":  now, "modified": now,
+        }
+        _custom_character_path(new_slug).write_text(json.dumps(record))
+        return jsonify({"saved": True, "slug": new_slug, "name": name,
+                        "creator": creator, "cloned_from": slug})
 
     @app.route("/api/custom_chars/<slug>/import", methods=["POST"])
     def custom_character_import(slug):
