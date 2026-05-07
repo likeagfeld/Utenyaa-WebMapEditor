@@ -330,51 +330,11 @@ function init() {
       _setRotateMode(_rotateMode === 'object' ? 'none' : 'object'));
   }
 
-  /* UV combo cycler — diagnostic for the persistent rotation
-   * mismatch. Cycles through 4 combos:
-   *   A: base 0 (engine empirical), rot 'right'
-   *   B: base 0,                    rot 'left'
-   *   C: base 1 (Three.js standard), rot 'right'
-   *   D: base 1,                    rot 'left'
-   * Each click flips window.UV_* and refreshes the 3D view so the
-   * operator can compare against their Saturn's render of the same
-   * map and find the matching combination by inspection. */
-  const _uvBtn = document.getElementById('btn-uv-cycle');
-  const _uvCombos = [
-    /* Confirmed by hardware test: combo with base 1 + right-shift
-     * matches the Saturn render. Operator screenshotted a 2x2 water-
-     * circle layout — editor (was on base 0) showed circles; Saturn
-     * showed X-pattern, every tile 180° off. Base 1 is exactly the
-     * 180° flip of base 0, so it's now the default ('A' label).
-     * Other combos kept as fallback exploration in case a different
-     * map exposes a residual mismatch. */
-    { label: 'A', base: 1, dir: 'right' },
-    { label: 'B', base: 1, dir: 'left'  },
-    { label: 'C', base: 0, dir: 'right' },
-    { label: 'D', base: 0, dir: 'left'  },
-  ];
-  let _uvIdx = 0;
-  /* Set the window vars synchronously at init so the FIRST refresh
-   * (later in init() / next show()) already uses combo A. Do NOT
-   * call refreshFromLevel() here — the scene mesh isn't built yet
-   * and triggering refresh mid-init was crashing the editor load. */
-  window.UV_BASE = _uvCombos[_uvIdx].base;
-  window.UV_ROT_DIR = _uvCombos[_uvIdx].dir;
-  if (_uvBtn) {
-    _uvBtn.textContent = 'UV: ' + _uvCombos[_uvIdx].label +
-      ' (base ' + _uvCombos[_uvIdx].base + ', ' + _uvCombos[_uvIdx].dir + ')';
-    _uvBtn.addEventListener('click', () => {
-      _uvIdx = (_uvIdx + 1) % _uvCombos.length;
-      const c = _uvCombos[_uvIdx];
-      window.UV_BASE = c.base;
-      window.UV_ROT_DIR = c.dir;
-      _uvBtn.textContent = 'UV: ' + c.label +
-        ' (base ' + c.base + ', ' + c.dir + ')';
-      if (window.utenyaa3D && window.utenyaa3D.refreshFromLevel) {
-        window.utenyaa3D.refreshFromLevel();
-      }
-    });
-  }
+  /* UV combo cycle button removed in 0.8. Tile UV mapping is now a
+   * direct port of PawCraft's Tile.Render() algorithm (canonical
+   * reference for the .UTE format) — no longer operator-tunable
+   * because there's no remaining ambiguity. See the rebuildTerrainMesh
+   * UV section for the implementation. */
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
     _picker.downX = ev.clientX;
@@ -580,41 +540,46 @@ function rebuildTerrain(level) {
       // CCW from top: (0,0), (1,0), (1,1), (0,1)
       positions.push(wx, wy, z00,  wxe, wy, z10,  wxe, wye, z11,  wx, wye, z01);
 
-      // UV: rotation+mirror per DepthAndRotationAndMirror byte.
-      // Both base AND rotation-step direction are operator-tunable
-      // because deriving them from SGL docs has produced wrong
-      // answers twice now (the actual hardware behavior depends
-      // on factors that aren't documented — slot order, VRAM
-      // texture layout, sprHVflip interaction). Two knobs on
-      // window so the operator can hot-swap without a redeploy:
-      //
-      //   window.UV_BASE = 0 (default) | 1
-      //     0 → [(1,1),(0,1),(0,0),(1,0)]  — empirical base from
-      //         commit 7cdce97
-      //     1 → [(0,0),(1,0),(1,1),(0,1)]  — Three.js standard
-      //
-      //   window.UV_ROT_DIR = 'right' (default) | 'left'
-      //     right → uv = [uv[3], uv[0], uv[1], uv[2]]  — matches
-      //             engine's baseIndex DECREMENT
-      //     left  → uv = [uv[1], uv[2], uv[3], uv[0]]  — opposite
-      //             direction in case engine actually increments
-      //
-      // To live-test on the deployed editor: open browser console
-      // and set the var, then call window.utenyaa3D.refreshFromLevel().
-      // Once the right combination is found, hard-code it back in.
+      /* UV: direct port of PawCraft's Tile.Render() algorithm.
+       * Reference: https://github.com/ReyeMe/PawCraft/blob/main/PawCraft/Rendering/Tile.cs
+       *   - Base UV list (Tile.cs:21):     [(0,0),(0,1),(1,1),(1,0)]
+       *   - Vertex order (Tile.cs:96-101): [TL, BL, BR, TR]  (CCW from TL)
+       *   - Mirror (Tile.cs:163):          uvs.Reverse()  if MirrorTexture
+       *   - Rotation (Tile.cs:165-168):    LEFT-SHIFT  uvs.Skip(1).Concat(uvs.Take(1))
+       *
+       * This editor pushes positions in a different order:
+       *   (wx,wy), (wxe,wy), (wxe,wye), (wx,wye)
+       *   = [TL, TR, BR, BL]  (CW from TL — opposite of PawCraft)
+       *
+       * To produce the SAME per-vertex UV assignment as PawCraft,
+       * compute PawCraft's UVs in PawCraft's vertex order, then
+       * remap to this editor's order:
+       *   mine[i] = paw[PAW_INDEX_FOR_MY_VERTEX[i]]
+       * where PAW_INDEX_FOR_MY_VERTEX maps:
+       *   my TL (idx 0) → paw TL (idx 0)
+       *   my TR (idx 1) → paw TR (idx 3)
+       *   my BR (idx 2) → paw BR (idx 2)
+       *   my BL (idx 3) → paw BL (idx 1)
+       * = [0, 3, 2, 1]
+       *
+       * This was previously an operator-tunable two-knob system
+       * (UV_BASE 0|1 × UV_ROT_DIR right|left); analysis confirmed
+       * that combo A (base 1 + right-shift) was already mathematically
+       * equivalent to PawCraft, but expressing the algorithm as a
+       * direct port removes any doubt about correctness. The window.
+       * UV_* knobs and the UV cycle button are removed. */
       const rot = (tile.raw >> 6) & 3;
       const mir = (tile.raw & 0x10) !== 0;
-      const _base = (window.UV_BASE === 1)
-        ? [[0,0], [1,0], [1,1], [0,1]]
-        : [[1,1], [0,1], [0,0], [1,0]];
-      let uv = _base.map(p => p.slice());
+      let paw = [[0,0], [0,1], [1,1], [1,0]];
+      if (mir) paw = paw.slice().reverse();
       for (let r = 0; r < rot; r++) {
-        uv = (window.UV_ROT_DIR === 'left')
-          ? [uv[1], uv[2], uv[3], uv[0]]
-          : [uv[3], uv[0], uv[1], uv[2]];
+        paw = paw.slice(1).concat(paw.slice(0, 1));  // left-shift, per PawCraft
       }
-      if (mir) uv = uv.map(([u, v]) => [1 - u, v]);
-      for (const [u, v] of uv) uvs.push(u, v);
+      const PAW_IDX_FOR_MY = [0, 3, 2, 1];
+      for (let i = 0; i < 4; i++) {
+        const [u, v] = paw[PAW_IDX_FOR_MY[i]];
+        uvs.push(u, v);
+      }
 
       // Per-corner gouraud color from .UTE
       let g = level.gourad[idx] || [0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF];
