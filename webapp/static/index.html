@@ -154,7 +154,7 @@
            updating in lock-step with the 3D view. Toggle the
            `body.show-2d` class (or remove the rule) to bring it back. -->
       <button class="view-tab" data-view="2d" style="display:none">2D Editor</button>
-      <button class="view-tab active" data-view="3d">3D Editor</button>
+      <button class="view-tab active" data-view="3d">Map Editor</button>
       <button class="view-tab" data-view="sprites">Sprites</button>
       <span class="view-help muted">3D: <b>click</b> applies current tool · <b>Rotate Tile ON</b>: click cycles tile 90° · <b>Rotate Object ON</b>: click entity = aim · drag = orbit · wheel = zoom</span>
     </div>
@@ -259,57 +259,68 @@
       </div>
       <dialog id="sprites-help-dialog">
         <form method="dialog">
-          <h2 style="color:#f5a623;margin-bottom:8px">Sprite design guide</h2>
-          <div style="line-height:1.5;font-size:13px;max-width:520px">
-            <p><b>Layout.</b> Each character has 5 frames; the engine
-            picks one based on facing angle:</p>
-            <ul style="margin-left:18px;margin-top:4px">
-              <li><b>frame 0 — south:</b> facing the camera (default)</li>
-              <li><b>frame 1 — diagonal:</b> SW / SE</li>
-              <li><b>frame 2 — north:</b> facing away</li>
-              <li><b>frame 3 — side:</b> W / E (mirror-flipped per side)</li>
-              <li><b>frame 4 — dead:</b> charred / explosion KO sprite</li>
+          <h2 style="color:#f5a623;margin-bottom:8px">Custom Sprite Design Guide</h2>
+          <div style="line-height:1.5;font-size:13px;max-width:540px">
+            <p><b>What to design.</b> Each character is 5 frames at
+            16×16 pixels. The Saturn engine picks one frame per
+            render based on the player's facing direction (see
+            <code>Player::Draw</code> in <code>src/Entities/Player.hpp</code>):</p>
+            <ul style="margin-left:18px;margin-top:4px;font-size:12px">
+              <li><b>frame 0:</b> facing east-ish (engine angle 66°–111°). Mirror-flipped to face west on the engine side — you only draw one side.</li>
+              <li><b>frame 1:</b> 3/4-view (engine angles 21°–66° and 111°–156°). Used for both NE and SE-ish angles via mirror.</li>
+              <li><b>frame 2:</b> head-on view (engine angles 336°–21° / 156°–201°). Used for both north and south facings via mirror.</li>
+              <li><b>frame 3:</b> opposite 3/4-view (engine angles 201°–256° / 291°–336°).</li>
+              <li><b>frame 4:</b> rear-quadrant view (engine angle 256°–291°).</li>
             </ul>
+            <p style="font-size:12px;color:#aaa;margin-top:4px">
+            The cleanest reference is the built-in Char 0 (catgirl)
+            sprites in the grid above — open it to see exactly what
+            each frame looks like. The template downloads default to
+            those sprites so you can paint over them.</p>
 
-            <p style="margin-top:10px"><b>Template.</b> The download is
-            1280×1280 RGBA PNG — each Saturn pixel is rendered as a
-            16×16 block so it looks crisp in default image viewers
-            and gives plenty of room to edit. 5 columns × 5 rows of
-            cells. Row = character index, column = frame index.
-            Magenta pixels are placeholder transparency markers —
-            replace with real colors or leave alpha = 0 on import.
-            On import the server samples the top-left of each 16×16
-            block, so use a 1-pixel pencil tool with no anti-aliasing
-            for predictable results.</p>
+            <p style="margin-top:10px"><b>Template format.</b> One
+            custom character = one 1280×256 RGBA PNG (5 frames
+            horizontal, 256×256 per cell at 16× scale). Each Saturn
+            pixel is rendered as a 16×16 block so the download looks
+            crisp in any image viewer. The blank template starts
+            from the catgirl sprites so you have a real starting
+            point — paint over them.</p>
 
-            <p style="margin-top:10px"><b>Originals are always
-            preserved.</b> The source <code>CHARS.PAK</code> file on
-            disk is never modified by this editor. Imports + manual
-            pixel edits are stored as separate per-frame override
-            files under <code>webapp/custom_chars/</code>.
-            <b>Reset to original</b> on a single frame deletes that
-            frame's override; <b>Reset all to original</b> wipes
-            every override at once. Either way, the original Saturn
-            sprites come right back.</p>
-
-            <p style="margin-top:10px"><b>Saturn quantization.</b> The
-            VDP1 only knows ARGB-1555 (5 bits R, G, B; 1 bit alpha).
-            Your 8-bit-per-channel pixels get quantized on import
-            (top 5 bits kept). Alpha &lt; 128 → fully transparent;
-            alpha ≥ 128 → fully opaque. There's no alpha blending —
-            partial transparency is not representable on hardware.</p>
+            <p style="margin-top:10px"><b>Saturn pixel format.</b>
+            VDP1 stores sprites in ARGB-1555 (5 bits each for R, G,
+            B; 1 bit for alpha). Your 8-bit-per-channel pixels are
+            quantized on import (top 5 bits kept). Alpha &lt; 128 →
+            fully transparent; alpha ≥ 128 → fully opaque. There's
+            no alpha blending on hardware — pixels are either there
+            or they're not.</p>
 
             <p style="margin-top:10px"><b>Editor recommendations.</b>
-            Aseprite, GIMP, Photoshop, or Paint.NET all work. Set
-            canvas to 80×80, disable smoothing/anti-aliasing, and
-            export as PNG (8-bit RGBA). The template's 16×16 cells
-            give you exactly enough room — don't draw across cell
-            borders since each cell becomes one sprite frame.</p>
+            Aseprite is ideal for pixel art. GIMP, Photoshop, or
+            Paint.NET also work. Disable smoothing / anti-aliasing
+            and use a 1-pixel pencil tool (or paint-bucket on the
+            16×16 blocks of the upscaled template). On import the
+            server samples one corner of each block to recover the
+            Saturn pixel, so any per-pixel anti-aliasing will be
+            sampled away unpredictably.</p>
 
-            <p style="margin-top:10px"><b>In-game delivery.</b> Phase
-            2 saves edits to the editor server only. Phase 3 (next
-            iteration) will stream custom sprites to the Saturn
-            during a match so other players see your character.</p>
+            <p style="margin-top:10px"><b>Originals are always
+            preserved.</b> The built-in <code>CHARS.PAK</code> on
+            disk is never modified. Built-in characters are
+            <em>read-only</em> in the editor — clicking one shows
+            an enlarged preview plus a <em>Clone</em> button that
+            creates a new editable custom character pre-populated
+            with that built-in's frames. Custom characters can also
+            be cloned from each other.</p>
+
+            <p style="margin-top:10px"><b>In-game delivery (work in
+            progress).</b> Custom characters live as JSON files
+            under <code>webapp/custom_characters/</code> on the
+            editor server. Phase B (server) added the protocol
+            opcodes <code>0xC0..0xC6</code> and the listing/streaming
+            handlers. Phase C (Saturn-side download flow) and Phase
+            D (lobby integration + remote-player fallback) ship in
+            future builds — the editor catalog you build today will
+            be ready for those.</p>
           </div>
           <menu style="margin-top:14px"><button value="ok">Got it</button></menu>
         </form>
