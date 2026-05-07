@@ -585,13 +585,23 @@ function rebuildTerrain(level) {
        * matches a 90° offset in rotation-space. Empirically rather
        * than analytically: `+1 mod 4` to rot puts editor in lockstep
        * with Saturn for every rotation 0..3. */
-      /* Stored rotation byte → PawCraft left-shift count.
-       * +3 (= -1 mod 4) is the round-2 hardware-validated value
-       * that operator confirmed worked for shiro on real Saturn.
-       * Dansfield's directional textures expose a residual mismatch
-       * that no single constant offset fully fixes; staying with
-       * the value that's known to be right for at least one map. */
-      const rot = (((tile.raw >> 6) & 3) + 3) & 3;
+      /* Faithful PawCraft port: rot = stored, NO offset.
+       * Reference: ReyeMe/PawCraft Tile.cs line 178
+       *   for (int rot = 0; rot < (int)tile.RotateTexture; rot++)
+       *       uvs = uvs.Skip(1).Concat(uvs.Take(1)).ToList();
+       *
+       * tile.RotateTexture IS the stored rotation byte (bits 7-6).
+       * No offset, no negation — the loop iterates exactly that
+       * many times.
+       *
+       * Both PawCraft (OpenGL with V-flipped texture upload) and
+       * three.js (default flipY=true) place UV (0,0) at the source
+       * image's TOP-LEFT pixel, matching Saturn VDP1's first-byte-
+       * is-TL convention from the PAK loader. With identical UV
+       * conventions and identical left-shift algorithm, editor's
+       * preview produces the same pixel-to-screen mapping as the
+       * Saturn render for every stored value. */
+      const rot = (tile.raw >> 6) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();
