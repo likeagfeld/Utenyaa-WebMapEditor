@@ -588,7 +588,13 @@ function rebuildTerrain(level) {
        * matches a 90° offset in rotation-space. Empirically rather
        * than analytically: `+1 mod 4` to rot puts editor in lockstep
        * with Saturn for every rotation 0..3. */
-      const rot = (((tile.raw >> 6) & 3) + 1) & 3;
+      /* Empirical correction iteration 3:
+       *   - With raw_rot:        editor was 180° off (user's first screenshot)
+       *   - With raw_rot+1:      editor was 180° off (rotated wrong direction)
+       *   - With raw_rot+3 (=-1): TRYING NOW. User reported +2 clicks
+       *     needed at the +1 state, so the editor needs 2 more steps.
+       *     +1+2=+3, equivalent to -1 mod 4. */
+      const rot = (((tile.raw >> 6) & 3) + 3) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();

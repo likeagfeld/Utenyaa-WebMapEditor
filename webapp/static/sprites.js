@@ -534,9 +534,488 @@
     });
   }
 
+  /* =================================================================
+   * Custom characters (Phase A) — full named character authoring
+   * with name + creator metadata, parallel to map authoring. Saturn-
+   * side download flow + lobby integration is Phase B/C/D.
+   * ================================================================= */
+
+  const CC_FRAMES = 5;     // matches engine FramesPerController
+  const CC_W = 16, CC_H = 16;
+  const CC_PIXEL_SCALE = 16;
+
+  /* ccEdit state — separate from `edit` (which is the built-in PAK
+   * frame editor). Mirrors the same shape so the pixel-paint code
+   * paths stay one-to-one. */
+  let ccEdit = null;
+  /*  ccEdit = {
+   *    slug, name, creator, isNew,
+   *    frames: [Uint16Array(256), ...×5],   // ARGB-1555 per pixel
+   *    selectedFrame: 0..4,
+   *    selectedColor: u16,
+   *    drawing: false | 'paint' | 'erase',
+   *    dirty: bool,
+   *  }
+   */
+
+  function ccSlugify(name) {
+    let s = (name || '').toLowerCase().trim();
+    s = s.replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '');
+    if (s.length > 32) s = s.substring(0, 32);
+    return s || 'char';
+  }
+
+  async function loadCustomCharsList() {
+    const list = $('#custom-chars-list');
+    if (!list) return;
+    list.innerHTML = '<div class="muted" style="padding:8px">Loading…</div>';
+    let info;
+    try {
+      const r = await fetch('api/custom_chars');
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      info = await r.json();
+    } catch (e) {
+      list.innerHTML =
+        '<div class="muted" style="padding:8px;color:#f55">Failed: '
+        + (e.message || e) + '</div>';
+      return;
+    }
+    list.innerHTML = '';
+    const chars = info.characters || [];
+    if (!chars.length) {
+      list.innerHTML =
+        '<div class="muted" style="padding:8px">'
+        + 'No custom characters yet. Click <b>+ New custom character</b> '
+        + 'to create one.</div>';
+      return;
+    }
+    for (const c of chars) {
+      const card = document.createElement('div');
+      card.className = 'cc-card';
+      const meta = document.createElement('div');
+      meta.className = 'cc-card-meta';
+      const nameEl = document.createElement('div');
+      nameEl.className = 'cc-card-name';
+      nameEl.textContent = c.name || c.slug;
+      const creatorEl = document.createElement('div');
+      creatorEl.className = 'cc-card-creator';
+      creatorEl.textContent = c.creator
+        ? `by ${c.creator}`
+        : '(no creator credit)';
+      const slugEl = document.createElement('div');
+      slugEl.className = 'cc-card-slug';
+      slugEl.textContent = c.slug;
+      meta.appendChild(nameEl);
+      meta.appendChild(creatorEl);
+      meta.appendChild(slugEl);
+      card.appendChild(meta);
+
+      const strip = document.createElement('div');
+      strip.className = 'cc-card-strip';
+      for (let f = 0; f < CC_FRAMES; f++) {
+        const img = document.createElement('img');
+        img.src = `api/custom_chars/${c.slug}/frame/${f}.png?t=${Date.now()}`;
+        img.draggable = false;
+        strip.appendChild(img);
+      }
+      card.appendChild(strip);
+
+      const actions = document.createElement('div');
+      actions.className = 'cc-card-actions';
+      const editBtn = document.createElement('button');
+      editBtn.className = 'btn';
+      editBtn.textContent = 'Edit';
+      editBtn.addEventListener('click', () => openCcEditor(c.slug));
+      actions.appendChild(editBtn);
+      card.appendChild(actions);
+      list.appendChild(card);
+    }
+  }
+
+  /* ---- Custom-character editor (per-frame pixel painting) -------- */
+
+  function newCcEdit(slug, name, creator) {
+    const frames = [];
+    for (let f = 0; f < CC_FRAMES; f++) {
+      frames.push(new Uint16Array(CC_W * CC_H));   // all 0 = transparent
+    }
+    return {
+      slug, name: name || slug, creator: creator || '',
+      isNew: true, frames,
+      selectedFrame: 0,
+      selectedColor: 0xFFFF,
+      drawing: false,
+      dirty: true,
+    };
+  }
+
+  async function openCcEditor(slug) {
+    if (!slug) {
+      showCcEditor(false);
+      return;
+    }
+    let data;
+    try {
+      const r = await fetch(`api/custom_chars/${encodeURIComponent(slug)}`);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      data = await r.json();
+    } catch (e) {
+      alert('Failed to load: ' + (e.message || e));
+      return;
+    }
+    const frames = (data.frames || []).slice(0, CC_FRAMES).map(
+      arr => new Uint16Array(arr));
+    while (frames.length < CC_FRAMES) {
+      frames.push(new Uint16Array(CC_W * CC_H));
+    }
+    ccEdit = {
+      slug:    data.slug || slug,
+      name:    data.name || slug,
+      creator: data.creator || '',
+      isNew:   false,
+      frames,
+      selectedFrame: 0,
+      selectedColor: 0xFFFF,
+      drawing: false,
+      dirty: false,
+    };
+    showCcEditor(true);
+    setupCcEditor();
+  }
+
+  function startCcNew() {
+    const name = prompt('Character name (required):', '');
+    if (!name || !name.trim()) return;
+    const creator = prompt('Creator name (optional, shown alongside the character):', '') || '';
+    const slug = ccSlugify(name);
+    if (!slug) {
+      alert('Could not produce a valid slug from that name. Try letters / numbers / hyphens.');
+      return;
+    }
+    ccEdit = newCcEdit(slug, name.trim(), creator.trim());
+    showCcEditor(true);
+    setupCcEditor();
+    /* Auto-save on first paint isn't ideal; keep the user in control.
+     * The editor stays in dirty=true state until they hit Save. */
+  }
+
+  function showCcEditor(show) {
+    const ed = $('#custom-chars-editor');
+    if (ed) ed.style.display = show ? '' : 'none';
+  }
+
+  function setupCcEditor() {
+    if (!ccEdit) return;
+    const nameInput    = $('#cc-name');
+    const creatorInput = $('#cc-creator');
+    const slugDisplay  = $('#cc-slug-display');
+    const dlBtn        = $('#btn-cc-download-png');
+    if (nameInput)    nameInput.value    = ccEdit.name;
+    if (creatorInput) creatorInput.value = ccEdit.creator;
+    if (slugDisplay)  slugDisplay.textContent =
+      `slug: ${ccEdit.slug}` + (ccEdit.isNew ? ' (new)' : '');
+    if (dlBtn) {
+      dlBtn.href = ccEdit.isNew
+        ? 'api/custom_chars/template.png'
+        : `api/custom_chars/${encodeURIComponent(ccEdit.slug)}/template.png`;
+      dlBtn.download = `utenyaa-${ccEdit.slug}-template.png`;
+    }
+
+    /* Frame thumbnails (5 across, click to select). */
+    const thumbs = $('#cc-frame-thumbs');
+    if (thumbs) {
+      thumbs.innerHTML = '';
+      for (let f = 0; f < CC_FRAMES; f++) {
+        const t = document.createElement('div');
+        t.className = 'cc-thumb';
+        if (f === ccEdit.selectedFrame) t.classList.add('selected');
+        const cv = document.createElement('canvas');
+        cv.width = CC_W * 4; cv.height = CC_H * 4;   // 4× scale
+        renderFrameToCanvas(cv, ccEdit.frames[f], CC_W, CC_H);
+        t.appendChild(cv);
+        const cap = document.createElement('div');
+        cap.className = 'cc-thumb-cap';
+        cap.textContent = FRAME_LABELS[f] || ('f' + f);
+        t.appendChild(cap);
+        t.addEventListener('click', () => {
+          ccEdit.selectedFrame = f;
+          setupCcEditor();
+        });
+        thumbs.appendChild(t);
+      }
+    }
+
+    /* Bind canvas events fresh each time. */
+    const canvas = $('#cc-edit-canvas');
+    if (canvas) {
+      canvas.width  = CC_W * CC_PIXEL_SCALE;
+      canvas.height = CC_H * CC_PIXEL_SCALE;
+      const fresh = canvas.cloneNode(false);
+      canvas.parentNode.replaceChild(fresh, canvas);
+      fresh.addEventListener('mousedown',  ccCanvasDown);
+      fresh.addEventListener('mousemove',  ccCanvasMove);
+      fresh.addEventListener('mouseup',    ccCanvasUp);
+      fresh.addEventListener('mouseleave', ccCanvasUp);
+      fresh.addEventListener('contextmenu', (ev) => ev.preventDefault());
+      ccRedraw();
+    }
+
+    /* Tool bar (color picker) */
+    const bar = $('#cc-tool-bar');
+    if (bar) {
+      bar.innerHTML = '';
+      const lbl = document.createElement('label');
+      lbl.textContent = 'Color';
+      const ci = document.createElement('input');
+      ci.type = 'color';
+      ci.value = argb1555ToHex(ccEdit.selectedColor);
+      ci.addEventListener('input', () => {
+        ccEdit.selectedColor = hexToArgb1555(ci.value, true);
+        const sw = $('#cc-color-swatch');
+        if (sw) {
+          const [R, G, B] = argb1555ToRgba(ccEdit.selectedColor);
+          sw.style.background = `rgb(${R},${G},${B})`;
+        }
+      });
+      lbl.appendChild(ci);
+      bar.appendChild(lbl);
+      const sw = document.createElement('span');
+      sw.id = 'cc-color-swatch';
+      const [R, G, B] = argb1555ToRgba(ccEdit.selectedColor);
+      sw.style.background = `rgb(${R},${G},${B})`;
+      sw.style.cssText += 'display:inline-block;width:22px;height:22px;border:1px solid #2a3a55;border-radius:3px;margin-left:4px';
+      bar.appendChild(sw);
+      const help = document.createElement('span');
+      help.className = 'muted';
+      help.style.marginLeft = '12px';
+      help.innerHTML = 'Left = paint · Right = erase · <b>Shift</b> = eyedrop';
+      bar.appendChild(help);
+    }
+  }
+
+  function renderFrameToCanvas(canvas, pixelsU16, w, h) {
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = false;
+    const sx = canvas.width / w;
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const v = pixelsU16[y * w + x];
+        const [R, G, B, A] = argb1555ToRgba(v);
+        if (A === 0) {
+          ctx.fillStyle = (x + y) & 1 ? '#222' : '#333';
+        } else {
+          ctx.fillStyle = `rgb(${R},${G},${B})`;
+        }
+        ctx.fillRect(x * sx, y * sx, sx, sx);
+      }
+    }
+  }
+
+  function ccPixelAtEvent(ev) {
+    const canvas = $('#cc-edit-canvas');
+    const rect = canvas.getBoundingClientRect();
+    const px = Math.floor((ev.clientX - rect.left) / CC_PIXEL_SCALE);
+    const py = Math.floor((ev.clientY - rect.top)  / CC_PIXEL_SCALE);
+    if (px < 0 || px >= CC_W || py < 0 || py >= CC_H) return null;
+    return { x: px, y: py };
+  }
+  function ccCanvasDown(ev) {
+    if (!ccEdit) return;
+    const p = ccPixelAtEvent(ev);
+    if (!p) return;
+    if (ev.shiftKey) {
+      const v = ccEdit.frames[ccEdit.selectedFrame][p.y * CC_W + p.x];
+      ccEdit.selectedColor = v || 0xFFFF;
+      setupCcEditor();
+      return;
+    }
+    ccEdit.drawing = (ev.button === 2) ? 'erase' : 'paint';
+    ccPaintAt(p);
+    ev.preventDefault();
+  }
+  function ccCanvasMove(ev) {
+    if (!ccEdit || !ccEdit.drawing) return;
+    const p = ccPixelAtEvent(ev);
+    if (!p) return;
+    ccPaintAt(p);
+  }
+  function ccCanvasUp() {
+    if (ccEdit) ccEdit.drawing = false;
+  }
+  function ccPaintAt(p) {
+    const fr = ccEdit.frames[ccEdit.selectedFrame];
+    const i = p.y * CC_W + p.x;
+    const newVal = (ccEdit.drawing === 'erase') ? 0x0000 : ccEdit.selectedColor;
+    if (fr[i] !== newVal) {
+      fr[i] = newVal;
+      ccEdit.dirty = true;
+      ccDrawPixel(p.x, p.y);
+      const stat = $('#cc-status');
+      if (stat) stat.textContent = 'Unsaved changes';
+    }
+  }
+  function ccDrawPixel(x, y) {
+    const canvas = $('#cc-edit-canvas');
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    const v = ccEdit.frames[ccEdit.selectedFrame][y * CC_W + x];
+    const [R, G, B, A] = argb1555ToRgba(v);
+    if (A === 0) {
+      const cx = x * CC_PIXEL_SCALE, cy = y * CC_PIXEL_SCALE;
+      const half = CC_PIXEL_SCALE >> 1;
+      ctx.fillStyle = '#222';
+      ctx.fillRect(cx, cy, CC_PIXEL_SCALE, CC_PIXEL_SCALE);
+      ctx.fillStyle = '#333';
+      ctx.fillRect(cx, cy, half, half);
+      ctx.fillRect(cx + half, cy + half, half, half);
+    } else {
+      ctx.fillStyle = `rgb(${R},${G},${B})`;
+      ctx.fillRect(x * CC_PIXEL_SCALE, y * CC_PIXEL_SCALE,
+                   CC_PIXEL_SCALE, CC_PIXEL_SCALE);
+    }
+    ctx.strokeStyle = GRID_LINE_COLOR;
+    ctx.strokeRect(x * CC_PIXEL_SCALE + 0.5, y * CC_PIXEL_SCALE + 0.5,
+                   CC_PIXEL_SCALE - 1, CC_PIXEL_SCALE - 1);
+  }
+  function ccRedraw() {
+    const canvas = $('#cc-edit-canvas');
+    if (!canvas || !ccEdit) return;
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    for (let y = 0; y < CC_H; y++)
+      for (let x = 0; x < CC_W; x++) ccDrawPixel(x, y);
+  }
+
+  async function saveCcEdit() {
+    if (!ccEdit) return;
+    const nameInput    = $('#cc-name');
+    const creatorInput = $('#cc-creator');
+    const stat = $('#cc-status');
+    const newName    = (nameInput && nameInput.value.trim()) || ccEdit.name;
+    const newCreator = (creatorInput && creatorInput.value.trim()) || '';
+    if (!newName) {
+      alert('Name required.');
+      return;
+    }
+    /* Slug stays stable after creation so URLs / saves don't drift. */
+    const payload = {
+      name: newName,
+      creator: newCreator,
+      frames: ccEdit.frames.map(fr => Array.from(fr)),
+    };
+    if (stat) stat.textContent = 'Saving…';
+    try {
+      const r = await fetch(
+        `api/custom_chars/${encodeURIComponent(ccEdit.slug)}`,
+        {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify(payload),
+        });
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
+      ccEdit.name = newName;
+      ccEdit.creator = newCreator;
+      ccEdit.isNew = false;
+      ccEdit.dirty = false;
+      if (stat) stat.textContent = 'Saved.';
+      loadCustomCharsList();
+      setupCcEditor();
+    } catch (e) {
+      if (stat) stat.textContent = 'Save failed: ' + (e.message || e);
+    }
+  }
+
+  async function deleteCcEdit() {
+    if (!ccEdit) return;
+    if (ccEdit.isNew) {
+      if (!confirm('Discard this new character without saving?')) return;
+      ccEdit = null;
+      showCcEditor(false);
+      return;
+    }
+    if (!confirm(`Delete "${ccEdit.name}" (slug ${ccEdit.slug}) permanently?`)) return;
+    try {
+      const r = await fetch(
+        `api/custom_chars/${encodeURIComponent(ccEdit.slug)}`,
+        { method: 'DELETE' });
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({}));
+        throw new Error(err.error || ('HTTP ' + r.status));
+      }
+      ccEdit = null;
+      showCcEditor(false);
+      loadCustomCharsList();
+    } catch (e) {
+      alert('Delete failed: ' + (e.message || e));
+    }
+  }
+
+  async function uploadCcPng(file) {
+    if (!ccEdit) return;
+    if (ccEdit.isNew) {
+      alert('Save the new character first (so it has a slug), then upload to overwrite its frames.');
+      return;
+    }
+    const stat = $('#cc-status');
+    if (stat) stat.textContent = 'Uploading…';
+    try {
+      const url = `api/custom_chars/${encodeURIComponent(ccEdit.slug)}/import`;
+      const r = await fetch(url, {
+        method:  'POST',
+        headers: { 'Content-Type': 'image/png' },
+        body:    file,
+      });
+      const result = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(result.error || ('HTTP ' + r.status));
+      /* Re-fetch the now-updated character so the editor + thumbs reflect. */
+      await openCcEditor(ccEdit.slug);
+      if (stat) stat.textContent = `Imported (${result.imported_from || '?'}, ${result.scale || 1}× scale).`;
+      loadCustomCharsList();
+    } catch (e) {
+      if (stat) stat.textContent = 'Upload failed: ' + (e.message || e);
+    }
+  }
+
+  function initCustomChars() {
+    const newBtn = $('#btn-cc-new');
+    if (newBtn) newBtn.addEventListener('click', startCcNew);
+    const refresh = $('#btn-cc-refresh');
+    if (refresh) refresh.addEventListener('click', loadCustomCharsList);
+    const closeBtn = $('#btn-cc-close');
+    if (closeBtn) closeBtn.addEventListener('click', () => {
+      if (ccEdit && ccEdit.dirty
+          && !confirm('Close without saving? Unsaved edits will be lost.')) return;
+      ccEdit = null;
+      showCcEditor(false);
+    });
+    const saveBtn = $('#btn-cc-save');
+    if (saveBtn) saveBtn.addEventListener('click', saveCcEdit);
+    const delBtn = $('#btn-cc-delete');
+    if (delBtn) delBtn.addEventListener('click', deleteCcEdit);
+    const uploadInput = $('#cc-upload-png');
+    if (uploadInput) uploadInput.addEventListener('change', (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (file) uploadCcPng(file);
+      ev.target.value = '';
+    });
+  }
+
+  /* Hook into the existing init() so Custom Characters loads when
+   * the Sprites tab is opened (alongside the built-in grid). */
+  const origLoadSprites = loadSprites;
+  loadSprites = async function () {
+    await origLoadSprites();
+    loadCustomCharsList();
+  };
+
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', () => { init(); initCustomChars(); });
   } else {
     init();
+    initCustomChars();
   }
 })();

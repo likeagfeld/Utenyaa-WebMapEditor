@@ -22,6 +22,7 @@ slurp up.
 """
 
 from __future__ import annotations
+import json
 import os
 import secrets
 import sys
@@ -89,6 +90,13 @@ DEFAULT_CHARS_PAK_PATH = os.environ.get(
 DEFAULT_CUSTOM_CHARS_DIR = os.environ.get(
     "UTENYAA_CUSTOM_CHARS_DIR",
     str(HERE / "custom_chars"))
+# Custom CHARACTERS (each with name + creator metadata + 5 sprite
+# frames) live here. Different from the per-frame override system
+# above — these are NEW characters, not edits of the built-in 5.
+# One <slug>.json per character, parallel to the maps/ directory.
+DEFAULT_CUSTOM_CHARACTERS_DIR = os.environ.get(
+    "UTENYAA_CUSTOM_CHARACTERS_DIR",
+    str(HERE / "custom_characters"))
 DEFAULT_MODELS_DIR = os.environ.get(
     "UTENYAA_MODELS_DIR",
     str(HERE.parent / "reference_models"))
@@ -256,6 +264,9 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
     custom_chars_dir = Path(DEFAULT_CUSTOM_CHARS_DIR)
     custom_chars_dir.mkdir(parents=True, exist_ok=True)
     app.config["CUSTOM_CHARS_DIR"] = str(custom_chars_dir)
+    custom_characters_dir = Path(DEFAULT_CUSTOM_CHARACTERS_DIR)
+    custom_characters_dir.mkdir(parents=True, exist_ok=True)
+    app.config["CUSTOM_CHARACTERS_DIR"] = str(custom_characters_dir)
     model_cache = ModelCache(models_dir)
     app.config["MODELS"] = model_cache
 
@@ -798,6 +809,334 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
                         "sheet": f"{w}x{h}", "cell": f"{cell_w}x{cell_h}",
                         "scale": block,
                         "originals_preserved": True})
+
+    # ------------------------------------------------------------------
+    # Custom CHARACTERS — full named characters (5 frames each) authored
+    # by users and saved with name + creator metadata, parallel to the
+    # maps/ directory. Saturn-side download flow + lobby integration is
+    # Phase B/C/D — for now the editor stores these so users can author
+    # and the catalog is ready when Saturn-side delivery lands.
+    # ------------------------------------------------------------------
+
+    CUSTOM_CHAR_SCHEMA_VERSION = 1
+    CUSTOM_CHAR_FRAMES = 5    # matches Saturn engine FramesPerController
+    CUSTOM_CHAR_W = 16        # all CHARS.PAK frames are 16x16
+    CUSTOM_CHAR_H = 16
+
+    def _custom_character_path(slug: str) -> Path:
+        return Path(app.config["CUSTOM_CHARACTERS_DIR"]) / f"{slug}.json"
+
+    def _validate_char_slug(slug: str) -> str | None:
+        """Returns error string if slug is bad, else None. Slugs must be
+        [a-z0-9_-]+ and 1..32 chars; reject anything that could escape
+        the dir (.., /, \\)."""
+        if not slug or len(slug) > 32:
+            return "slug must be 1..32 chars"
+        for c in slug:
+            if not (c.isalnum() or c in "-_") or c.isupper():
+                return "slug must match [a-z0-9_-]+"
+        return None
+
+    @app.route("/api/custom_chars", methods=["GET"])
+    def list_custom_characters():
+        """List all saved custom characters with metadata thumbnails.
+        Body: {characters: [{slug, name, creator, modified}]}"""
+        d = Path(app.config["CUSTOM_CHARACTERS_DIR"])
+        out = []
+        for jf in sorted(d.glob("*.json")):
+            try:
+                data = json.loads(jf.read_text())
+            except (OSError, ValueError):
+                continue
+            out.append({
+                "slug":     jf.stem,
+                "name":     data.get("name") or jf.stem,
+                "creator":  data.get("creator") or "",
+                "modified": data.get("modified") or "",
+            })
+        return jsonify({"characters": out})
+
+    @app.route("/api/custom_chars/<slug>", methods=["GET"])
+    def get_custom_character(slug):
+        err = _validate_char_slug(slug)
+        if err: return jsonify({"error": err}), 400
+        path = _custom_character_path(slug)
+        if not path.exists(): abort(404)
+        try:
+            data = json.loads(path.read_text())
+        except ValueError as e:
+            return jsonify({"error": f"corrupt: {e}"}), 500
+        return jsonify(data)
+
+    @app.route("/api/custom_chars/<slug>", methods=["POST"])
+    def save_custom_character(slug):
+        """Save a custom character. Body:
+            {name: string, creator: string,
+             frames: [[<256 argb1555 ints>], ...5 frames]}
+        Validates dimensions and pixel ranges."""
+        if not _is_admin():
+            abort(403)
+        err = _validate_char_slug(slug)
+        if err: return jsonify({"error": err}), 400
+        body = request.get_json(silent=True) or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return jsonify({"error": "name required"}), 400
+        creator = (body.get("creator") or "").strip()
+        frames = body.get("frames") or []
+        if (not isinstance(frames, list)
+            or len(frames) != CUSTOM_CHAR_FRAMES):
+            return jsonify({
+                "error": f"frames must be {CUSTOM_CHAR_FRAMES} arrays"
+            }), 400
+        npix = CUSTOM_CHAR_W * CUSTOM_CHAR_H
+        for fi, fr in enumerate(frames):
+            if not isinstance(fr, list) or len(fr) != npix:
+                return jsonify({
+                    "error":
+                        f"frame {fi}: expected {npix} pixels, "
+                        f"got {len(fr) if isinstance(fr, list) else type(fr).__name__}"
+                }), 400
+            for v in fr:
+                if not isinstance(v, int) or not (0 <= v <= 0xFFFF):
+                    return jsonify({
+                        "error":
+                            f"frame {fi}: pixel values must be 0..65535 ints"
+                    }), 400
+
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        path = _custom_character_path(slug)
+        prior = {}
+        if path.exists():
+            try: prior = json.loads(path.read_text())
+            except ValueError: prior = {}
+        record = {
+            "schema_version": CUSTOM_CHAR_SCHEMA_VERSION,
+            "slug":     slug,
+            "name":     name,
+            "creator":  creator,
+            "width":    CUSTOM_CHAR_W,
+            "height":   CUSTOM_CHAR_H,
+            "frames":   [list(fr) for fr in frames],
+            "created":  prior.get("created") or now,
+            "modified": now,
+        }
+        path.write_text(json.dumps(record))
+        return jsonify({"saved": True, "slug": slug,
+                        "name": name, "creator": creator})
+
+    @app.route("/api/custom_chars/<slug>", methods=["DELETE"])
+    def delete_custom_character(slug):
+        if not _is_admin():
+            abort(403)
+        err = _validate_char_slug(slug)
+        if err: return jsonify({"error": err}), 400
+        path = _custom_character_path(slug)
+        if not path.exists():
+            return jsonify({"error": "not found"}), 404
+        path.unlink()
+        return jsonify({"deleted": True, "slug": slug})
+
+    @app.route("/api/custom_chars/<slug>/frame/<int:frame>.png",
+               methods=["GET"])
+    def custom_character_frame_png(slug, frame):
+        """Serve one frame of a saved custom character as a PNG."""
+        err = _validate_char_slug(slug)
+        if err: abort(400)
+        if not 0 <= frame < CUSTOM_CHAR_FRAMES: abort(404)
+        path = _custom_character_path(slug)
+        if not path.exists(): abort(404)
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            abort(500)
+        frames = data.get("frames") or []
+        if frame >= len(frames): abort(404)
+        pixels = frames[frame]
+        w, h = data.get("width", CUSTOM_CHAR_W), data.get("height", CUSTOM_CHAR_H)
+        rgba = bytearray(w * h * 4)
+        for i, p in enumerate(pixels):
+            R, G, B, A = pak_format._argb1555_to_rgba(p)
+            rgba[i*4]   = R
+            rgba[i*4+1] = G
+            rgba[i*4+2] = B
+            rgba[i*4+3] = A
+        png = pak_format.encode_png(bytes(rgba), w, h)
+        from flask import Response
+        return Response(png, mimetype="image/png",
+                        headers={"Cache-Control": "no-cache"})
+
+    @app.route("/api/custom_chars/template.png", methods=["GET"])
+    def custom_character_blank_template():
+        """Single-character blank template — 5 frames horizontal,
+        rendered at 16× scale (1280×256) with magenta transparency
+        markers on every pixel. Ready for the user to paint in any
+        image editor and re-upload via /api/custom_chars/<slug>/import."""
+        sx = TEMPLATE_SCALE
+        cell_w, cell_h = CUSTOM_CHAR_W, CUSTOM_CHAR_H
+        cols, rows = CUSTOM_CHAR_FRAMES, 1
+        sheet_w = cols * cell_w * sx
+        sheet_h = rows * cell_h * sx
+        sheet = bytearray(sheet_w * sheet_h * 4)
+        # Fill with magenta (transparency marker).
+        for i in range(0, len(sheet), 4):
+            sheet[i] = 255; sheet[i+1] = 0; sheet[i+2] = 255; sheet[i+3] = 0
+        # Draw faint cell borders so users see frame boundaries.
+        for ci in range(cols):
+            for py in range(0, sheet_h):
+                bx = ci * cell_w * sx
+                bi = (py * sheet_w + bx) * 4
+                sheet[bi]   = 64; sheet[bi+1] = 64; sheet[bi+2] = 64; sheet[bi+3] = 255
+        png = pak_format.encode_png(bytes(sheet), sheet_w, sheet_h)
+        from flask import Response
+        return Response(png, mimetype="image/png",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Content-Disposition":
+                                'attachment; filename="utenyaa-custom-character-template.png"',
+                        })
+
+    @app.route("/api/custom_chars/<slug>/template.png", methods=["GET"])
+    def custom_character_template(slug):
+        """5-frame horizontal strip template for editing an EXISTING
+        custom character. 16× scale (1280×256). Each Saturn pixel
+        becomes a 16×16 block. Same transparency-marker convention
+        as the bulk template."""
+        err = _validate_char_slug(slug)
+        if err: abort(400)
+        path = _custom_character_path(slug)
+        if not path.exists(): abort(404)
+        try:
+            data = json.loads(path.read_text())
+        except ValueError:
+            abort(500)
+        frames = data.get("frames") or []
+        sx = TEMPLATE_SCALE
+        cell_w, cell_h = CUSTOM_CHAR_W, CUSTOM_CHAR_H
+        cols, rows = CUSTOM_CHAR_FRAMES, 1
+        sheet_w = cols * cell_w * sx
+        sheet_h = rows * cell_h * sx
+        sheet = bytearray(sheet_w * sheet_h * 4)
+        for fi in range(min(cols, len(frames))):
+            pixels = frames[fi]
+            for py in range(cell_h):
+                for px in range(cell_w):
+                    p = pixels[py * cell_w + px] if py * cell_w + px < len(pixels) else 0
+                    R, G, B, A = pak_format._argb1555_to_rgba(p)
+                    if A == 0:
+                        rr, gg, bb, aa = 255, 0, 255, 0
+                    else:
+                        rr, gg, bb, aa = R, G, B, 255
+                    base_x = (fi * cell_w + px) * sx
+                    base_y = py * sx
+                    for dy in range(sx):
+                        di = ((base_y + dy) * sheet_w + base_x) * 4
+                        for dx in range(sx):
+                            sheet[di]   = rr
+                            sheet[di+1] = gg
+                            sheet[di+2] = bb
+                            sheet[di+3] = aa
+                            di += 4
+        png = pak_format.encode_png(bytes(sheet), sheet_w, sheet_h)
+        from flask import Response
+        return Response(png, mimetype="image/png",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Content-Disposition":
+                                f'attachment; filename="utenyaa-custom-{slug}-template.png"',
+                        })
+
+    @app.route("/api/custom_chars/<slug>/import", methods=["POST"])
+    def custom_character_import(slug):
+        """Upload a 5-frame strip PNG to overwrite a custom character's
+        sprite frames. Accepts native (80×16) or 16× (1280×256).
+        Body: image/png. Form field 'name' / 'creator' optional —
+        if present they update the metadata; otherwise prior values
+        retained (for new characters, name defaults to slug).
+
+        IMPORTANT: This OVERRIDES the named custom character. The
+        built-in CHARS.PAK is never modified by this endpoint."""
+        if not _is_admin():
+            abort(403)
+        err = _validate_char_slug(slug)
+        if err: return jsonify({"error": err}), 400
+
+        # Accept name/creator from query string (works with both raw
+        # PNG body and multipart) — body is the image data.
+        name = (request.args.get("name") or "").strip()
+        creator = (request.args.get("creator") or "").strip()
+
+        cell_w, cell_h = CUSTOM_CHAR_W, CUSTOM_CHAR_H
+        cols, rows = CUSTOM_CHAR_FRAMES, 1
+
+        # Body: raw image/png OR multipart 'file'
+        data = b""
+        if request.content_type and request.content_type.startswith("image/png"):
+            data = request.get_data() or b""
+        else:
+            up = request.files.get("file")
+            if up is not None:
+                data = up.read() or b""
+        if not data:
+            return jsonify({"error": "no PNG data"}), 400
+        try:
+            w, h, rgba = pak_format.decode_png_rgba(data)
+        except ValueError as e:
+            return jsonify({"error": f"PNG decode: {e}"}), 400
+
+        nat_w, nat_h = cols * cell_w, rows * cell_h
+        if w == nat_w and h == nat_h:
+            block = 1
+        elif w == nat_w * TEMPLATE_SCALE and h == nat_h * TEMPLATE_SCALE:
+            block = TEMPLATE_SCALE
+        else:
+            return jsonify({
+                "error":
+                    f"strip must be {nat_w}x{nat_h} (1×) or "
+                    f"{nat_w*TEMPLATE_SCALE}x{nat_h*TEMPLATE_SCALE} "
+                    f"({TEMPLATE_SCALE}×); got {w}x{h}"
+            }), 400
+
+        frames = []
+        for fi in range(cols):
+            cell_rgba = bytearray(cell_w * cell_h * 4)
+            for py in range(cell_h):
+                for px in range(cell_w):
+                    sx = (fi * cell_w + px) * block
+                    sy = py * block
+                    src = (sy * w + sx) * 4
+                    di = (py * cell_w + px) * 4
+                    cell_rgba[di]   = rgba[src]
+                    cell_rgba[di+1] = rgba[src+1]
+                    cell_rgba[di+2] = rgba[src+2]
+                    cell_rgba[di+3] = rgba[src+3]
+            pixels = pak_format.rgba8_to_argb1555(bytes(cell_rgba),
+                                                  cell_w, cell_h)
+            frames.append(pixels)
+
+        # Reuse save endpoint logic for metadata upsert
+        path = _custom_character_path(slug)
+        prior = {}
+        if path.exists():
+            try: prior = json.loads(path.read_text())
+            except ValueError: prior = {}
+        if not name: name = prior.get("name") or slug
+        if not creator: creator = prior.get("creator") or ""
+        from datetime import datetime, timezone
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        record = {
+            "schema_version": CUSTOM_CHAR_SCHEMA_VERSION,
+            "slug": slug, "name": name, "creator": creator,
+            "width": cell_w, "height": cell_h,
+            "frames": frames,
+            "created": prior.get("created") or now,
+            "modified": now,
+        }
+        path.write_text(json.dumps(record))
+        return jsonify({"saved": True, "slug": slug, "name": name,
+                        "creator": creator,
+                        "imported_from": f"{w}x{h}", "scale": block})
 
     @app.route("/api/chars/reset_all", methods=["POST"])
     def reset_all_chars():

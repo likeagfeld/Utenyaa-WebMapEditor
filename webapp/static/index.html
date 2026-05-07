@@ -190,19 +190,12 @@
     </details>
     <div class="view-pane view-sprites" style="display:none">
       <div class="sprites-toolbar">
-        <span class="muted">CHARS.PAK — 5 characters × 5 frames. Click a frame to edit.
-          <b style="color:#7fc26b">Originals are always preserved on disk;</b>
-          edits go to <code>custom_chars/</code> overrides.</span>
+        <span class="muted">CHARS.PAK — 5 built-in characters × 5 frames. Click a frame to edit one pixel-by-pixel.
+          <b style="color:#7fc26b">Originals are always preserved on disk.</b>
+          To create your own NEW character, scroll to <b>Custom Characters</b> below.</span>
         <span class="sprites-toolbar-spacer"></span>
-        <a id="btn-sprites-download" class="btn"
-           href="api/chars/template.png" download="utenyaa-chars-template.png"
-           title="Download a 1280×1280 PNG sheet of all 25 sprites (5 cols × 5 rows). Each Saturn pixel is rendered as a 16×16 block so the download isn't blurry in default image viewers. Edit in any image editor that handles RGBA PNG (Aseprite, GIMP, Photoshop, Paint.NET) and re-upload via Import.">Download template</a>
-        <label id="btn-sprites-import-wrap" class="btn"
-               title="Upload an edited template PNG. Accepts the 1280×1280 download size or native 80×80. Each cell becomes a custom override; the original CHARS.PAK is NOT modified.">Import template
-          <input type="file" id="sprites-import-file" accept="image/png" style="display:none">
-        </label>
         <button id="btn-sprites-reset-all" class="btn"
-                title="Delete ALL custom sprite overrides and restore every frame to its original CHARS.PAK pixels. The source PAK is never touched; this just deletes the editor's saved customizations.">Reset all to original</button>
+                title="Delete ALL per-frame custom sprite overrides for the built-in 5 characters and restore every frame to its original CHARS.PAK pixels. Doesn't affect Custom Characters.">Reset all to original</button>
         <button id="btn-sprites-help" class="btn"
                 title="Show the design guide.">?</button>
         <button id="btn-sprites-refresh" class="btn">Refresh</button>
@@ -215,6 +208,54 @@
         </div>
         <div id="sprites-tool-bar" class="sprites-tool-bar"></div>
         <canvas id="sprites-detail-canvas" width="256" height="256"></canvas>
+      </div>
+
+      <div class="custom-chars-section">
+        <h3 class="custom-chars-header">
+          Custom Characters
+          <span class="muted" style="font-weight:normal;font-size:11px">— named characters with creator credit. Saturn-side download flow ships in a future update; the catalog you build here will be ready for it.</span>
+        </h3>
+        <div class="custom-chars-toolbar">
+          <button id="btn-cc-new" class="btn primary">+ New custom character</button>
+          <a id="btn-cc-blank-template" class="btn"
+             href="api/custom_chars/template.png"
+             download="utenyaa-custom-character-template.png"
+             title="Download a blank 1280×256 PNG strip (5 frames horizontal, magenta transparency markers + cell borders) to design a new character offline.">Download blank template</a>
+          <button id="btn-cc-refresh" class="btn">Refresh</button>
+        </div>
+        <div id="custom-chars-list" class="custom-chars-list"></div>
+
+        <div id="custom-chars-editor" class="custom-chars-editor" style="display:none">
+          <div class="custom-chars-editor-header">
+            <span class="cc-edit-title">Edit custom character</span>
+            <button id="btn-cc-close" class="btn">Close</button>
+          </div>
+          <div class="custom-chars-editor-meta">
+            <label>Name <input id="cc-name" type="text" maxlength="32"></label>
+            <label>Creator <input id="cc-creator" type="text" maxlength="32"></label>
+            <span id="cc-slug-display" class="muted"></span>
+          </div>
+          <div class="custom-chars-editor-strip">
+            <span class="muted" style="font-size:11px">Click a frame to edit:</span>
+            <div id="cc-frame-thumbs" class="cc-frame-thumbs"></div>
+          </div>
+          <div class="custom-chars-editor-canvas-wrap">
+            <canvas id="cc-edit-canvas" width="256" height="256"></canvas>
+          </div>
+          <div id="cc-tool-bar" class="sprites-tool-bar"></div>
+          <div class="custom-chars-editor-actions">
+            <button id="btn-cc-save" class="btn primary">Save</button>
+            <a id="btn-cc-download-png" class="btn"
+               title="Download this character's 5 frames as a single editable PNG strip (1280×256). Edit in any image editor and re-upload via Import.">Download as PNG</a>
+            <label id="btn-cc-upload-png-wrap" class="btn"
+                   title="Upload a 5-frame PNG strip to overwrite this character's sprites. Accepts 80×16 or 1280×256.">Upload PNG
+              <input type="file" id="cc-upload-png" accept="image/png" style="display:none">
+            </label>
+            <button id="btn-cc-delete" class="btn"
+                    style="background:#e94560">Delete</button>
+            <span id="cc-status" class="muted"></span>
+          </div>
+        </div>
       </div>
       <dialog id="sprites-help-dialog">
         <form method="dialog">
