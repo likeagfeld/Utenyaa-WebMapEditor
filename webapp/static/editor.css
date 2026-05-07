@@ -317,3 +317,92 @@ dialog::backdrop { background: rgba(0,0,0,0.7); }
   padding: 2px 6px; cursor: pointer; border-radius: 3px;
   font-family: inherit; font-size: 11px;
 }
+
+/* ---- Sprites tab (CHARS.PAK display) -------------------------------- */
+.view-pane.view-sprites {
+  background: #0f1626;
+  padding: 12px;
+  overflow-y: auto;
+  height: 100%;
+}
+.sprites-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #2a3a55;
+}
+.sprites-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sprites-row {
+  display: grid;
+  grid-template-columns: 100px repeat(var(--sprites-cols, 5), 1fr);
+  gap: 8px;
+  align-items: center;
+}
+.sprites-row-label {
+  color: #f5a623;
+  font-weight: 600;
+  font-size: 13px;
+  padding: 4px 8px;
+}
+.sprites-cell {
+  background: #16213e;
+  border: 1px solid #2a3a55;
+  border-radius: 4px;
+  padding: 6px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  transition: background 0.15s;
+}
+.sprites-cell:hover {
+  background: #1d2d4a;
+  border-color: #f5a623;
+}
+.sprites-cell img {
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  background: repeating-conic-gradient(#222 0% 25%, #333 0% 50%) 50% / 12px 12px;
+}
+.sprites-cell-cap {
+  font-size: 10px;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.sprites-detail {
+  margin-top: 16px;
+  padding: 12px;
+  background: #16213e;
+  border: 1px solid #2a3a55;
+  border-radius: 4px;
+}
+.sprites-detail-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.sprites-detail-label {
+  font-weight: 600;
+  color: #e0e0e0;
+}
+#sprites-detail-canvas {
+  display: block;
+  background: #000;
+  border: 1px solid #2a3a55;
+  image-rendering: pixelated;
+  image-rendering: -moz-crisp-edges;
+  image-rendering: crisp-edges;
+}

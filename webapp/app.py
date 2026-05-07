@@ -78,6 +78,9 @@ DEFAULT_SESSION_SECRET = os.environ.get(
 DEFAULT_PAK_PATH = os.environ.get(
     "UTENYAA_TERRAIN_PAK",
     str(HERE.parent / "reference_pak" / "TERRAIN.PAK"))
+DEFAULT_CHARS_PAK_PATH = os.environ.get(
+    "UTENYAA_CHARS_PAK",
+    str(HERE.parent / "reference_pak" / "CHARS.PAK"))
 DEFAULT_MODELS_DIR = os.environ.get(
     "UTENYAA_MODELS_DIR",
     str(HERE.parent / "reference_models"))
@@ -221,6 +224,7 @@ class ModelCache:
 
 def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
                pak_path: str = DEFAULT_PAK_PATH,
+               chars_pak_path: str = DEFAULT_CHARS_PAK_PATH,
                models_dir: str = DEFAULT_MODELS_DIR,
                admin_user: str = DEFAULT_ADMIN_USERNAME,
                admin_pass: str = DEFAULT_ADMIN_PASSWORD,
@@ -239,6 +243,8 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
     app.config["MAP_STORE"] = store
     tex_cache = TextureCache(pak_path)
     app.config["TEXTURES"] = tex_cache
+    chars_cache = TextureCache(chars_pak_path)
+    app.config["CHARS"] = chars_cache
     model_cache = ModelCache(models_dir)
     app.config["MODELS"] = model_cache
 
@@ -454,6 +460,38 @@ def create_app(maps_dir: str = DEFAULT_MAPS_DIR,
         """Serve one texture as a PNG (cached after first decode)."""
         try:
             png = tex_cache.png(idx)
+        except IndexError:
+            abort(404)
+        from flask import Response
+        return Response(png, mimetype="image/png",
+                        headers={"Cache-Control": "public, max-age=3600"})
+
+    @app.route("/api/chars", methods=["GET"])
+    def list_chars():
+        """List all sprite frames in CHARS.PAK. The Saturn engine
+        loads CHARS.PAK as 5 characters × 5 frames each = 25 sprites
+        (per main.cxx: FramesPerController=5, num_characters=5).
+        Frame layout per Player::Draw rotation logic:
+          frame 0 = facing south (default)
+          frame 1 = facing south-west / south-east
+          frame 2 = facing north
+          frame 3 = west / east
+          frame 4 = dead/charred
+        Each character row is 5 consecutive PAK indices."""
+        return jsonify({
+            "pak_path":   chars_cache.pak_path,
+            "count":      chars_cache.count,
+            "characters": 5,
+            "frames_per_character": 5,
+            "frame_labels": ["south", "diagonal", "north", "side", "dead"],
+            "textures":   chars_cache.info(),
+        })
+
+    @app.route("/api/chars/<int:idx>.png", methods=["GET"])
+    def char_png(idx: int):
+        """Serve one character sprite frame as a PNG."""
+        try:
+            png = chars_cache.png(idx)
         except IndexError:
             abort(404)
         from flask import Response

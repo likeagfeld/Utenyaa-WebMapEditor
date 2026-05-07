@@ -155,6 +155,7 @@
            `body.show-2d` class (or remove the rule) to bring it back. -->
       <button class="view-tab" data-view="2d" style="display:none">2D Editor</button>
       <button class="view-tab active" data-view="3d">3D Editor</button>
+      <button class="view-tab" data-view="sprites">Sprites</button>
       <span class="view-help muted">3D: <b>click</b> applies current tool · <b>Rotate Tile ON</b>: click cycles tile 90° · <b>Rotate Object ON</b>: click entity = aim · drag = orbit · wheel = zoom</span>
     </div>
     <div class="view-pane view-2d" style="display:none">
@@ -187,6 +188,20 @@
       <summary>Texture palette (click to set tile texture)</summary>
       <div id="texture-palette" class="texture-palette"></div>
     </details>
+    <div class="view-pane view-sprites" style="display:none">
+      <div class="sprites-toolbar">
+        <span class="muted">CHARS.PAK — 5 characters × 5 frames each. Click a frame to enlarge.</span>
+        <button id="btn-sprites-refresh" class="btn">Refresh</button>
+      </div>
+      <div id="sprites-grid" class="sprites-grid"></div>
+      <div id="sprites-detail" class="sprites-detail" style="display:none">
+        <div class="sprites-detail-header">
+          <span id="sprites-detail-label" class="sprites-detail-label"></span>
+          <button id="btn-sprites-close" class="btn">Close</button>
+        </div>
+        <canvas id="sprites-detail-canvas" width="256" height="256"></canvas>
+      </div>
+    </div>
   </section>
 
   <aside class="entity-list-pane panel">
@@ -220,5 +235,6 @@
 </script>
 <script type="module" src="static/editor3d.js"></script>
 <script src="static/editor.js"></script>
+<script src="static/sprites.js"></script>
 </body>
 </html>
