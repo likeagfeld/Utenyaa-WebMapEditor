@@ -330,11 +330,34 @@ function init() {
       _setRotateMode(_rotateMode === 'object' ? 'none' : 'object'));
   }
 
-  /* UV combo cycle button removed in 0.8. Tile UV mapping is now a
-   * direct port of PawCraft's Tile.Render() algorithm (canonical
-   * reference for the .UTE format) — no longer operator-tunable
-   * because there's no remaining ambiguity. See the rebuildTerrainMesh
-   * UV section for the implementation. */
+  /* Rotation LUT knob — runtime-editable mapping from .UTE stored
+   * rotation byte to PawCraft left-shift count used by the editor
+   * preview. Identity default; operator tunes to match Saturn.
+   * Tries to load from localStorage so the chosen LUT survives
+   * page reloads; persists on Apply. */
+  try {
+    const saved = JSON.parse(localStorage.getItem('utenyaa_rot_lut') || 'null');
+    if (Array.isArray(saved) && saved.length === 4) {
+      window.UTENYAA_ROT_LUT = saved.map(v => (v | 0) & 3);
+      for (let i = 0; i < 4; i++) {
+        const inp = document.getElementById('rot-lut-' + i);
+        if (inp) inp.value = window.UTENYAA_ROT_LUT[i];
+      }
+    }
+  } catch (e) { /* ignore parse errors */ }
+  const _rotLutApplyBtn = document.getElementById('btn-rot-lut-apply');
+  if (_rotLutApplyBtn) {
+    _rotLutApplyBtn.addEventListener('click', () => {
+      const next = [];
+      for (let i = 0; i < 4; i++) {
+        const inp = document.getElementById('rot-lut-' + i);
+        next.push((parseInt(inp.value, 10) | 0) & 3);
+      }
+      window.UTENYAA_ROT_LUT = next;
+      try { localStorage.setItem('utenyaa_rot_lut', JSON.stringify(next)); } catch (e) {}
+      refreshFromLevel();
+    });
+  }
 
   renderer.domElement.addEventListener('mousedown', (ev) => {
     _picker.downX = ev.clientX;
@@ -590,55 +613,39 @@ function rebuildTerrain(level) {
        * matches a 90° offset in rotation-space. Empirically rather
        * than analytically: `+1 mod 4` to rot puts editor in lockstep
        * with Saturn for every rotation 0..3. */
-      /* DATA-DRIVEN derivation (round 14) using TILE_ROT_DBG dump
-       * captured at 19:20:19 on Dansfield + screen-space axis sense.
+      /* RUNTIME-EDITABLE LUT (replaces deduced formula).
        *
-       * Saturn V[0..3] vertex assignment per stored rotation
-       * (world-coord labels from the diagnostic):
-       *   stored=0  V0=WBR V1=WBL V2=WTL V3=WTR
-       *   stored=1  V0=WBL V1=WTL V2=WTR V3=WBR
-       *   stored=2  V0=WTL V1=WTR V2=WBR V3=WBL
-       *   stored=3  V0=WTR V1=WBR V2=WBL V3=WTL
+       * Multiple iterations of derived-formula attempts have failed
+       * to fully match Saturn output across both shiro and dansfield
+       * because at least one assumption in the SGL Dual_Plane UV /
+       * sprHVflip / world-axis chain disagrees with hardware in a
+       * way I can't pin down from logs alone. Switching to an
+       * operator-tunable lookup table indexed by stored rotation:
        *
-       * Map.hpp labels world (x+1, y=0) as "WTR" but world-y=0 is
-       * the SOUTH edge of the rendered map (camera at viewpoint
-       * 0,20,120 looking at target 0,30,0 with map rotated 0.5 rad
-       * around X). World y=0 projects to the BOTTOM of the screen,
-       * so the world→screen mapping is:
-       *   WTR (x+1, y=0) → screen-BR    WBR (x+1, y=1) → screen-TR
-       *   WTL (x,   y=0) → screen-BL    WBL (x,   y=1) → screen-TL
+       *   ROT_LUT[stored] = K (PawCraft left-shift count, 0..3)
        *
-       * SGL Dual_Plane assigns texel UVs (0,0)/(1,0)/(1,1)/(0,1) to
-       * V[0..3]; sprHVflip mirrors both axes, so the texel-TL pixel
-       * actually rendered at V[k] is the one at the OPPOSITE V slot
-       * — i.e. texel TL appears at V[2]. Mapping V[2]'s screen
-       * corner per stored:
-       *   stored=0  V[2]=WTL → screen-BL → 90° CCW visible
-       *   stored=1  V[2]=WTR → screen-BR → 180° visible
-       *   stored=2  V[2]=WBR → screen-TR → 90° CW  visible
-       *   stored=3  V[2]=WBL → screen-TL → 0°      visible
+       * The table is exposed as window.UTENYAA_ROT_LUT so it can be
+       * edited live from the browser console (or via the small UI
+       * knob below the canvas). After tweaking, the operator hits
+       * one key (R) to redraw. Workflow on the dansfield 2x2
+       * water-circle cluster (texture 1 at (13-14, 9-10) with
+       * stored values 1, 2, 0, 3 in TL/TR/BL/BR slots):
+       *   1. Set ROT_LUT[N] entries one at a time.
+       *   2. Compare each cluster tile's editor preview to its
+       *      on-Saturn render.
+       *   3. Adjust until all 4 cluster tiles match.
+       *   4. Tell me the final 4 LUT values; I bake them into the
+       *      const default and ship.
        *
-       * PawCraft left-shift count K → editor texel-TL position
-       * (computed via PAW_IDX_FOR_MY[0,3,2,1]):
-       *   K=0  TL → 0°       K=1  TR → 90° CW
-       *   K=2  BR → 180°     K=3  BL → 90° CCW
-       *
-       * To make editor stored=N display the same rotation Saturn
-       * stored=N displays, we need K(N):
-       *   stored=0 → K=3        stored=1 → K=2
-       *   stored=2 → K=1        stored=3 → K=0
-       *
-       * That's K = 3 - N, NOT a constant offset. The previous +3
-       * empirically "matched shiro" because shiro's rotated tiles
-       * happened to be on textures (0, 6, 19) where the partial
-       * +3 match (correct only at stored=0 and 2) was visually
-       * indistinguishable for stored=1 and 3 due to texture
-       * symmetry. Dansfield's directional textures (1, 2, 3, 12,
-       * 16) exposed the half-match.
-       *
-       * The negation formula matches all 4 stored values for both
-       * maps — verifiable on first run. */
-      const rot = (3 - ((tile.raw >> 6) & 3)) & 3;
+       * Default initial values: K=stored (identity). All 4 +N and
+       * 4 -N permutations have been tried as constant formulas;
+       * the LUT is the strict superset that allows non-uniform
+       * mappings the constant formulas can't express. */
+      if (!window.UTENYAA_ROT_LUT) {
+        window.UTENYAA_ROT_LUT = [0, 1, 2, 3];   /* identity default */
+      }
+      const stored = (tile.raw >> 6) & 3;
+      const rot = (window.UTENYAA_ROT_LUT[stored] | 0) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();

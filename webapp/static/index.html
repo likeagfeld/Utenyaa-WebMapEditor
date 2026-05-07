@@ -182,6 +182,21 @@
         <label><input type="checkbox" id="chk-show-entities" checked> Entities</label>
         <label><input type="checkbox" id="chk-show-gouraud" checked> Gouraud lighting</label>
       </div>
+      <!-- Rotation LUT calibration. Maps each stored rotation (0..3
+           in the .UTE byte) to a PawCraft left-shift count (0..3) the
+           editor preview applies. Tweak these until each tile in a
+           known 4-rotation cluster (e.g. dansfield (13,9)-(14,10))
+           visually matches the Saturn render. Default = identity. -->
+      <div class="three-overlay" style="margin-top:6px;font-size:11px;">
+        <span title="Maps each stored rotation byte (.UTE) to a PawCraft left-shift count for editor preview. Adjust to match Saturn. Identity default = [0,1,2,3].">
+          ROT-LUT:
+        </span>
+        <label>0→<input id="rot-lut-0" type="number" min="0" max="3" value="0" style="width:36px"></label>
+        <label>1→<input id="rot-lut-1" type="number" min="0" max="3" value="1" style="width:36px"></label>
+        <label>2→<input id="rot-lut-2" type="number" min="0" max="3" value="2" style="width:36px"></label>
+        <label>3→<input id="rot-lut-3" type="number" min="0" max="3" value="3" style="width:36px"></label>
+        <button id="btn-rot-lut-apply" class="btn">Apply &amp; Redraw</button>
+      </div>
     </div>
 
     <details class="texture-palette-detail">
