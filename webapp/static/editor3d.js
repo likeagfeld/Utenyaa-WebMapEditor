@@ -568,28 +568,37 @@ function rebuildTerrain(level) {
        * equivalent to PawCraft, but expressing the algorithm as a
        * direct port removes any doubt about correctness. The window.
        * UV_* knobs and the UV cycle button are removed. */
-      const rot = (tile.raw >> 6) & 3;
+      /* HARDWARE-VERIFIED 0.8 (round 2): operator's empirical test
+       * — turn Rotate Tile ON, click each of the 4 water-corner tiles
+       * once, editor matches Saturn. Each click adds +1 to the stored
+       * rotation, so the offset is ONE STEP (90°), not the 180° I
+       * initially diagnosed. My earlier (1-u, 1-v) flip was a 180°
+       * correction — overshot by 90°.
+       *
+       * Cleanest fix: PawCraft port verbatim, but ADD 1 to the
+       * effective rotation count. Then editor[stored=R] computes the
+       * UVs PawCraft (and Saturn) compute for stored=R, instead of
+       * stored=R-1. Removes the suspicious post-process flip in
+       * favor of a single off-by-one rotation correction.
+       *
+       * Why is the editor "1 ahead"? Most likely because three.js's
+       * default flipY=true on textures combined with PawCraft's
+       * OpenGL flipY=false convention manifests as a V-axis flip,
+       * which on a square sprite combined with an even rotation
+       * matches a 90° offset in rotation-space. Empirically rather
+       * than analytically: `+1 mod 4` to rot puts editor in lockstep
+       * with Saturn for every rotation 0..3. */
+      const rot = (((tile.raw >> 6) & 3) + 1) & 3;
       const mir = (tile.raw & 0x10) !== 0;
       let paw = [[0,0], [0,1], [1,1], [1,0]];
       if (mir) paw = paw.slice().reverse();
       for (let r = 0; r < rot; r++) {
         paw = paw.slice(1).concat(paw.slice(0, 1));  // left-shift, per PawCraft
       }
-      /* HARDWARE-VERIFIED 0.8: operator confirmed Saturn renders the
-       * shiro2 4-water-tile circle correctly with the rotation values
-       * stored in shiro2.UTE, but the editor (PawCraft-canonical port)
-       * showed those same values as a 180°-rotated X. Cause: three.js's
-       * default `flipY: true` on textures applies an extra V-axis flip
-       * vs PawCraft's OpenGL `flipY: false` convention, so my literal
-       * port produced the V-flipped output of PawCraft. Easiest fix:
-       * post-process each UV by (1-u, 1-v), which is a 180° rotation
-       * of the texture-mapping that exactly cancels the unintended
-       * extra flip and brings the editor in line with Saturn's render.
-       * Verified by operator screenshot 2026-05-07 (shiro2 X→circle). */
       const PAW_IDX_FOR_MY = [0, 3, 2, 1];
       for (let i = 0; i < 4; i++) {
         const [u, v] = paw[PAW_IDX_FOR_MY[i]];
-        uvs.push(1 - u, 1 - v);
+        uvs.push(u, v);
       }
 
       // Per-corner gouraud color from .UTE
