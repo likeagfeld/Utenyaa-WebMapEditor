@@ -570,7 +570,18 @@ function rebuildTerrain(level) {
        * where SGL Dual_Plane happened to honor the flip bits, but
        * showed visible 180° offsets where Dual_Plane silently
        * dropped them — which is what the user observed on Dansfield. */
-      const stored = (tile.raw >> 6) & 3;
+      /* Per-texture overrides (operator-reported on hardware test):
+       *   - +3 stored offset:    textures 1, 8, 19, 20
+       *   - horizontal mirror:   textures 1, 19, 20
+       * (1, 19, 20 get both: rotation compensation AND U-flip.) */
+      const tex_idx = tile.texture & 0xFF;
+      const TEX_ROT_PLUS_3 = new Set([1, 8, 19, 20]);
+      const TEX_HMIRROR    = new Set([1, 19, 20]);
+      const stored_ute = (tile.raw >> 6) & 3;
+      const stored = TEX_ROT_PLUS_3.has(tex_idx)
+        ? (stored_ute + 3) & 3
+        : stored_ute;
+      const hmirror = TEX_HMIRROR.has(tex_idx);
 
       /* Saturn's vertices[] order in Map.hpp:
        *   vertices[0] = (tileX+1, tileY)     // world-TR
@@ -618,9 +629,12 @@ function rebuildTerrain(level) {
       if (mir) slotUVs = slotUVs.slice().reverse();
 
       // Push UVs in editor's world-corner order (TL, TR, BR, BL).
+      // hmirror flips U so the editor preview shows the texture
+      // pre-mirrored horizontally (per-texture override above).
       for (let e = 0; e < 4; e++) {
         const k = slotForEditorVertex[e];
-        const [u, v] = slotUVs[k];
+        let [u, v] = slotUVs[k];
+        if (hmirror) u = 1 - u;
         uvs.push(u, v);
       }
 
