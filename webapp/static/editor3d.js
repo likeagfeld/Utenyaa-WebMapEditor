@@ -141,7 +141,26 @@ function init() {
   controls.minDistance = 30;
   controls.maxDistance = 600;
   controls.maxPolarAngle = Math.PI * 0.49;
+  /* Disable OrbitControls' native wheel zoom — its multiplier-by-
+   * deltaY behaviour gives wildly different feel between display
+   * states (operator-reported: with DevTools docked deltaY is
+   * small so zoom crawls; with DevTools closed deltaY jumps and
+   * zoom collapses to two extremes). Replaced with a fixed-step
+   * zoom that ignores deltaY magnitude and uses only its sign —
+   * every notch multiplies distance by 0.92 (zoom in) or 1.087
+   * (zoom out), giving identical feel regardless of OS/browser/DPI. */
+  controls.enableZoom = false;
   controls.update();
+  renderer.domElement.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const factor = ev.deltaY > 0 ? 1.087 : 0.92;
+    const offset = camera.position.clone().sub(controls.target);
+    const d = offset.length();
+    const clamped = Math.max(controls.minDistance,
+                    Math.min(controls.maxDistance, d * factor));
+    offset.setLength(clamped);
+    camera.position.copy(controls.target).add(offset);
+  }, { passive: false });
 
   // Engine: slLight is a single directional light. Used by ATTRIBUTE
   // entries that have UseLight (all NYA models do, per Model.hpp:174).
