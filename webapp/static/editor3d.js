@@ -537,81 +537,118 @@ function rebuildTerrain(level) {
       // CCW from top: (0,0), (1,0), (1,1), (0,1)
       positions.push(wx, wy, z00,  wxe, wy, z10,  wxe, wye, z11,  wx, wye, z01);
 
-      /* UV: direct port of PawCraft's Tile.Render() algorithm.
-       * Reference: https://github.com/ReyeMe/PawCraft/blob/main/PawCraft/Rendering/Tile.cs
-       *   - Base UV list (Tile.cs:21):     [(0,0),(0,1),(1,1),(1,0)]
-       *   - Vertex order (Tile.cs:96-101): [TL, BL, BR, TR]  (CCW from TL)
-       *   - Mirror (Tile.cs:163):          uvs.Reverse()  if MirrorTexture
-       *   - Rotation (Tile.cs:165-168):    LEFT-SHIFT  uvs.Skip(1).Concat(uvs.Take(1))
+      /* SATURN-FAITHFUL UV — verbatim port of Map.hpp's vertex-
+       * permutation algorithm under sprNoflip semantics.
        *
-       * This editor pushes positions in a different order:
-       *   (wx,wy), (wxe,wy), (wxe,wye), (wx,wye)
-       *   = [TL, TR, BR, BL]  (CW from TL — opposite of PawCraft)
+       * Per ReyeMe (original Utenyaa author): the engine does NOT
+       * use sprHVflip — rotation is achieved purely by reordering
+       * the polygon vertex array. Map.hpp uses
+       *   int baseIndex = 3 - rotation;
+       *   for v in 0..3: pltbl.Vertices[baseIndex++] = vertices[v];
+       * with vertices[] = { (x+1,y) /TR/, (x+1,y+1) /BR/,
+       *                     (x,y+1)  /BL/, (x,y)   /TL/ }.
        *
-       * To produce the SAME per-vertex UV assignment as PawCraft,
-       * compute PawCraft's UVs in PawCraft's vertex order, then
-       * remap to this editor's order:
-       *   mine[i] = paw[PAW_INDEX_FOR_MY_VERTEX[i]]
-       * where PAW_INDEX_FOR_MY_VERTEX maps:
-       *   my TL (idx 0) → paw TL (idx 0)
-       *   my TR (idx 1) → paw TR (idx 3)
-       *   my BR (idx 2) → paw BR (idx 2)
-       *   my BL (idx 3) → paw BL (idx 1)
-       * = [0, 3, 2, 1]
+       * With sprNoflip the default VDP1 sprite UV maps each polygon
+       * vertex slot V[k] to a fixed image corner:
+       *   V[0] (CMDXA/YA) → image (0,0) = TL → UV (0, 0)
+       *   V[1] (CMDXB/YB) → image (W,0) = TR → UV (1, 0)
+       *   V[2] (CMDXC/YC) → image (W,H) = BR → UV (1, 1)
+       *   V[3] (CMDXD/YD) → image (0,H) = BL → UV (0, 1)
        *
-       * This was previously an operator-tunable two-knob system
-       * (UV_BASE 0|1 × UV_ROT_DIR right|left); analysis confirmed
-       * that combo A (base 1 + right-shift) was already mathematically
-       * equivalent to PawCraft, but expressing the algorithm as a
-       * direct port removes any doubt about correctness. The window.
-       * UV_* knobs and the UV cycle button are removed. */
-      /* HARDWARE-VERIFIED 0.8 (round 2): operator's empirical test
-       * — turn Rotate Tile ON, click each of the 4 water-corner tiles
-       * once, editor matches Saturn. Each click adds +1 to the stored
-       * rotation, so the offset is ONE STEP (90°), not the 180° I
-       * initially diagnosed. My earlier (1-u, 1-v) flip was a 180°
-       * correction — overshot by 90°.
+       * For each editor world corner (TL/TR/BR/BL — pushed in this
+       * order via positions array) we find the slot k that holds
+       * that corner's vertex after the permutation, then assign
+       * slotUVs[k]. Saturn does the same lookup at draw time, so
+       * editor and Saturn sample the identical image pixel at the
+       * identical world corner of every tile.
        *
-       * Cleanest fix: PawCraft port verbatim, but ADD 1 to the
-       * effective rotation count. Then editor[stored=R] computes the
-       * UVs PawCraft (and Saturn) compute for stored=R, instead of
-       * stored=R-1. Removes the suspicious post-process flip in
-       * favor of a single off-by-one rotation correction.
+       * This replaces the previous PawCraft UV-shift port which was
+       * mathematically equivalent to a sprHVflip-honoring renderer.
+       * That assumption was wrong: ReyeMe confirmed the engine uses
+       * sprNoflip + vertex permutation only. The previous port and
+       * Map.hpp's now-removed sprHVflip cancelled out for tiles
+       * where SGL Dual_Plane happened to honor the flip bits, but
+       * showed visible 180° offsets where Dual_Plane silently
+       * dropped them — which is what the user observed on Dansfield. */
+      const stored = (tile.raw >> 6) & 3;
+
+      /* Saturn's vertices[] order in Map.hpp:
+       *   vertices[0] = (tileX+1, tileY)     // world-TR
+       *   vertices[1] = (tileX+1, tileY+1)   // world-BR
+       *   vertices[2] = (tileX,   tileY+1)   // world-BL
+       *   vertices[3] = (tileX,   tileY)     // world-TL
        *
-       * Why is the editor "1 ahead"? Most likely because three.js's
-       * default flipY=true on textures combined with PawCraft's
-       * OpenGL flipY=false convention manifests as a V-axis flip,
-       * which on a square sprite combined with an even rotation
-       * matches a 90° offset in rotation-space. Empirically rather
-       * than analytically: `+1 mod 4` to rot puts editor in lockstep
-       * with Saturn for every rotation 0..3. */
-      /* Faithful PawCraft port: rot = stored, NO offset.
-       * Reference: ReyeMe/PawCraft Tile.cs line 178
-       *   for (int rot = 0; rot < (int)tile.RotateTexture; rot++)
-       *       uvs = uvs.Skip(1).Concat(uvs.Take(1)).ToList();
-       *
-       * tile.RotateTexture IS the stored rotation byte (bits 7-6).
-       * No offset, no negation — the loop iterates exactly that
-       * many times.
-       *
-       * Both PawCraft (OpenGL with V-flipped texture upload) and
-       * three.js (default flipY=true) place UV (0,0) at the source
-       * image's TOP-LEFT pixel, matching Saturn VDP1's first-byte-
-       * is-TL convention from the PAK loader. With identical UV
-       * conventions and identical left-shift algorithm, editor's
-       * preview produces the same pixel-to-screen mapping as the
-       * Saturn render for every stored value. */
-      const rot = (tile.raw >> 6) & 3;
-      const mir = (tile.raw & 0x10) !== 0;
-      let paw = [[0,0], [0,1], [1,1], [1,0]];
-      if (mir) paw = paw.slice().reverse();
-      for (let r = 0; r < rot; r++) {
-        paw = paw.slice(1).concat(paw.slice(0, 1));  // left-shift, per PawCraft
+       * Editor positions are pushed as TL, TR, BR, BL (in editor's
+       * world-corner indexing). Map editor index → Saturn vertices[]
+       * index:
+       *   editor 0 (TL) → Saturn vertices[3]
+       *   editor 1 (TR) → Saturn vertices[0]
+       *   editor 2 (BR) → Saturn vertices[1]
+       *   editor 3 (BL) → Saturn vertices[2]
+       */
+      const SATURN_VERT_ORDER = [3, 0, 1, 2];
+
+      // Replicate Map.hpp's permutation: pltbl[baseIndex++] = vertices[v].
+      // Result: slotForEditorVertex[e] = polygon slot k holding editor
+      // vertex e after the permutation.
+      const slotForEditorVertex = [-1, -1, -1, -1];
+      let baseIndex = (3 - stored) & 3;
+      for (let v = 0; v < 4; v++) {
+        const editor_i = SATURN_VERT_ORDER.indexOf(v);
+        slotForEditorVertex[editor_i] = baseIndex;
+        baseIndex = (baseIndex + 1) & 3;
       }
-      const PAW_IDX_FOR_MY = [0, 3, 2, 1];
-      for (let i = 0; i < 4; i++) {
-        const [u, v] = paw[PAW_IDX_FOR_MY[i]];
+
+      /* Per-slot UV — actual SGL Dual_Plane sampling, cyclically
+       * shifted one position from raw-sprite default:
+       *   slot 0 → image TR → UV (1, 0)
+       *   slot 1 → image BR → UV (1, 1)
+       *   slot 2 → image BL → UV (0, 1)
+       *   slot 3 → image TL → UV (0, 0)
+       * Calibrated against operator hardware test: with the raw
+       * sprite default table, dansfield rendered +1 step (90°) off
+       * from Saturn — operator compensated by clicking rotate 3
+       * times (= -1 mod 4). SGL Dual_Plane uses its own UV layout
+       * that differs from what the VDP1 manual documents for raw
+       * sprites. Map.hpp's SAT_UV diagnostic SLOT_UV is updated in
+       * lockstep so the byte-for-byte comparison continues to
+       * reflect actual rendering. */
+      const mir = (tile.raw & 0x10) !== 0;
+      let slotUVs = [[1,0], [1,1], [0,1], [0,0]];
+      if (mir) slotUVs = slotUVs.slice().reverse();
+
+      // Push UVs in editor's world-corner order (TL, TR, BR, BL).
+      for (let e = 0; e < 4; e++) {
+        const k = slotForEditorVertex[e];
+        const [u, v] = slotUVs[k];
         uvs.push(u, v);
+      }
+
+      /* Targeted Dansfield 2x2 calibration cluster diagnostic.
+       * Pairs with Map.hpp's SAT_UV log. For the 4 tiles at
+       * (13,9)..(14,10) — tex=1 4-piece quarter-circle, all 4
+       * stored rotations represented — emit the actual UVs
+       * pushed at each world corner. Format matches the Saturn
+       * side EXACTLY so per-corner comparison is direct:
+       *   EDIT_UV (x,y) rot=R  TL=(u,v) TR=(u,v) BR=(u,v) BL=(u,v)
+       * Editor positions are pushed in world-corner order
+       * (TL, TR, BR, BL). The UVs array therefore has the last
+       * 8 entries: [TLu,TLv, TRu,TRv, BRu,BRv, BLu,BLv].
+       * Numerical match against SAT_UV → editor and Saturn agree
+       * at the UV level → mismatch lives in the texture/render
+       * pipeline. Numerical mismatch → UV math diverges and we
+       * have a concrete starting point. */
+      if ((x === 13 && y === 9) || (x === 14 && y === 9) ||
+          (x === 13 && y === 10) || (x === 14 && y === 10)) {
+        const r = (tile.raw >> 6) & 3;
+        const n = uvs.length;
+        console.log(
+          `EDIT_UV (${x},${y}) rot=${r}  ` +
+          `TL=(${uvs[n-8].toFixed(1)},${uvs[n-7].toFixed(1)}) ` +
+          `TR=(${uvs[n-6].toFixed(1)},${uvs[n-5].toFixed(1)}) ` +
+          `BR=(${uvs[n-4].toFixed(1)},${uvs[n-3].toFixed(1)}) ` +
+          `BL=(${uvs[n-2].toFixed(1)},${uvs[n-1].toFixed(1)})`
+        );
       }
 
       // Per-corner gouraud color from .UTE

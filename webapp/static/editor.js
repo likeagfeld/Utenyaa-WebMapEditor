@@ -416,37 +416,49 @@ canvas.addEventListener('wheel', (ev) => {
  * bits by one quarter turn (4-state, 0/90/180/270). Both update
  * immediately and force a redraw + 3D refresh so the user sees the
  * change. Exposed at window scope so editor3d.js can call it. */
-window.rotateAtTile = function rotateAtTile(x, y, degDelta) {
-  // Entity hit-test: any entity at this tile cell, LIFO.
-  let hit = -1;
-  for (let i = level.entities.length - 1; i >= 0; i--) {
-    if (level.entities[i].x === x && level.entities[i].y === y) {
-      hit = i; break;
+window.rotateAtTile = function rotateAtTile(x, y, degDelta, forceTile) {
+  // forceTile (default false): when true, BYPASS the entity hit-test
+  // and ALWAYS rotate the tile underneath, even if an entity sits
+  // on top of it. The 3D editor's dedicated "Rotate Tile" mode
+  // passes forceTile=true so the operator can rotate floor tiles
+  // beneath placed objects (operator-reported on Dansfield: "I am
+  // unable to rotate a tile that has an object on top of it").
+  // Without this branch the entity always wins, leaving the tile's
+  // rotation byte stuck at whatever it was when the object was
+  // first placed, which on the Saturn renders as a flat
+  // unrotated tile no matter how many times the user clicks.
+  if (!forceTile) {
+    // Entity hit-test: any entity at this tile cell, LIFO.
+    let hit = -1;
+    for (let i = level.entities.length - 1; i >= 0; i--) {
+      if (level.entities[i].x === x && level.entities[i].y === y) {
+        hit = i; break;
+      }
+    }
+    if (hit >= 0) {
+      const e = level.entities[hit];
+      // direction is fxp 16.16 in radians. Convert to degrees, rotate,
+      // back to fxp.
+      const curDeg = (e.direction / 65536.0) * (180 / Math.PI);
+      const newDeg = ((curDeg + degDelta) % 360 + 360) % 360;
+      e.direction = degToFxpRad(newDeg);
+      selectedEntityIdx = hit;
+      drawAll();
+      refreshSidebar();
+      // Trigger 3D scene refresh. `refreshFromLevel` lives in
+      // editor3d.js's separate <script> context — we can't lookup
+      // its name from here. Use the exposed window.utenyaa3D
+      // entry point instead. (Without this, tile/entity rotation
+      // updated the in-memory level but never repainted the 3D
+      // mesh, so users saw "rotation has no effect".)
+      if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
+        window.utenyaa3D.refreshFromLevel();
+      }
+      return;
     }
   }
-  if (hit >= 0) {
-    const e = level.entities[hit];
-    // direction is fxp 16.16 in radians. Convert to degrees, rotate,
-    // back to fxp.
-    const curDeg = (e.direction / 65536.0) * (180 / Math.PI);
-    const newDeg = ((curDeg + degDelta) % 360 + 360) % 360;
-    e.direction = degToFxpRad(newDeg);
-    selectedEntityIdx = hit;
-    drawAll();
-    refreshSidebar();
-    // Trigger 3D scene refresh. `refreshFromLevel` lives in
-    // editor3d.js's separate <script> context — we can't lookup
-    // its name from here. Use the exposed window.utenyaa3D
-    // entry point instead. (Without this, tile/entity rotation
-    // updated the in-memory level but never repainted the 3D
-    // mesh, so users saw "rotation has no effect".)
-    if (window.utenyaa3D && window.utenyaa3D.isVisible()) {
-      window.utenyaa3D.refreshFromLevel();
-    }
-    return;
-  }
-  // No entity → cycle tile rotation by 90°. Sign of degDelta picks
-  // direction; small steps still snap to a 90° increment.
+  // No entity (or forceTile) → cycle tile rotation by 90°. Sign of
+  // degDelta picks direction; small steps still snap to a 90° increment.
   const step = degDelta >= 0 ? 1 : 3;   // 3 = -1 mod 4
   const idx = x + y * MAP_DIM;
   const t = level.tiles[idx];
@@ -1114,8 +1126,16 @@ function setupViewTabs() {
     tab.addEventListener('click', () => {
       const view = tab.dataset.view;
       $$('.view-tab').forEach(t => t.classList.toggle('active', t === tab));
-      $$('.view-pane').forEach(p =>
-        p.classList.toggle('active', p.classList.contains('view-' + view)));
+      $$('.view-pane').forEach(p => {
+        // Clear any inline `display: none` set by other tab handlers
+        // (sprites.js writes inline style="display:none" on every
+        // pane when its tab is clicked; without resetting that here
+        // the .view-pane.active CSS rule (display: flex) gets
+        // overridden by the leftover inline style and the Map
+        // Editor stays hidden after a Sprites→Map round-trip).
+        p.style.display = '';
+        p.classList.toggle('active', p.classList.contains('view-' + view));
+      });
       // Tell the 3D module to refresh + handle its first init
       if (view === '3d' && window.utenyaa3D) {
         window.utenyaa3D.show();
